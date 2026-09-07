@@ -28,6 +28,7 @@ use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Schema;
 use Filament\Support\Enums\TextSize;
 use Filament\Tables\Columns\ColorColumn;
+use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\QueryBuilder;
 use Filament\Tables\Filters\QueryBuilder\Constraints\DateConstraint;
@@ -149,6 +150,11 @@ class LeaveTypeResource extends Resource
                                         Toggle::make('show_on_dashboard')
                                             ->inline(false)
                                             ->label(__('time-off::filament/clusters/configurations/resources/leave-type.form.sections.configuration.fields.show-on-dashboard')),
+                                        Toggle::make('is_active')
+                                            ->inline(false)
+                                            ->default(true)
+                                            ->label(__('time-off::filament/clusters/configurations/resources/leave-type.form.sections.configuration.fields.is-active'))
+                                            ->helperText(__('time-off::filament/clusters/configurations/resources/leave-type.form.sections.configuration.fields.is-active-helper')),
                                         Select::make('time_type')
                                             ->options(TimeType::class)
                                             ->default(TimeType::LEAVE->value)
@@ -221,6 +227,10 @@ class LeaveTypeResource extends Resource
                 TextColumn::make('company.name')
                     ->toggleable(isToggledHiddenByDefault: true)
                     ->searchable(),
+                IconColumn::make('is_active')
+                    ->label(__('time-off::filament/clusters/configurations/resources/leave-type.table.columns.is-active'))
+                    ->boolean()
+                    ->sortable(),
             ])
             ->filters([
                 QueryBuilder::make()
@@ -410,6 +420,10 @@ class LeaveTypeResource extends Resource
                                         ->placeholder('—'),
                                     IconEntry::make('show_on_dashboard')
                                         ->label(__('time-off::filament/clusters/configurations/resources/leave-type.infolist.sections.configuration.entries.show-on-dashboard'))
+                                        ->boolean()
+                                        ->placeholder('—'),
+                                    IconEntry::make('is_active')
+                                        ->label(__('time-off::filament/clusters/configurations/resources/leave-type.infolist.sections.configuration.entries.is-active'))
                                         ->boolean()
                                         ->placeholder('—'),
                                     TextEntry::make('time_type')

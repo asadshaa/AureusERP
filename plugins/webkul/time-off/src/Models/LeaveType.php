@@ -43,6 +43,7 @@ class LeaveType extends Model implements Sortable
 
     protected $casts = [
         'leave_validation_type' => LeaveValidationType::class,
+        'is_active'             => 'boolean',
     ];
 
     public $sortable = [
@@ -75,6 +76,14 @@ class LeaveType extends Model implements Sortable
             $leaveType->creator_id = $authUser->id;
 
             $leaveType->company_id ??= $authUser?->default_company_id;
+
+            // The `is_active` column is nullable with no DB default, and the
+            // dropdown that surfaces leave types to employees (TimeOffHelper)
+            // filters strictly on `is_active = true` — NULL never matches, so
+            // any leave type created without this defaulted would be silently
+            // unselectable. Default it here as a safety net for any creation
+            // path that doesn't go through the Filament form's Toggle.
+            $leaveType->is_active ??= true;
         });
     }
 }

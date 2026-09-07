@@ -4,6 +4,7 @@ namespace Webkul\Employee\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Auth;
 use Webkul\Support\Models\Company;
 
 class PerformanceGoal extends Model
@@ -34,5 +35,18 @@ class PerformanceGoal extends Model
     public function review(): BelongsTo
     {
         return $this->belongsTo(PerformanceReview::class, 'review_id');
+    }
+
+    protected static function boot()
+    {
+        parent::boot();
+
+        static::creating(function (self $goal): void {
+            // No Filament UI creates this record today, but the same
+            // company_id gap exists as every other model fixed alongside
+            // this one — default it so any future creation path doesn't
+            // reintroduce the issue.
+            $goal->company_id ??= $goal->review?->company_id ?? Auth::user()?->default_company_id;
+        });
     }
 }

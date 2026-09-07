@@ -33,6 +33,8 @@ return [
                     'public-holiday-included'             => 'Días festivos incluidos',
                     'allow-to-attach-supporting-document' => 'Permitir adjuntar documento justificativo',
                     'show-on-dashboard'                   => 'Mostrar en el panel',
+                    'is-active'                           => 'Activo',
+                    'is-active-helper'                    => 'Los tipos de ausencia inactivos no se pueden seleccionar al solicitar tiempo libre.',
                     'allow-negative-cap'                  => 'Permitir límite negativo',
                     'kind-off-time'                       => 'Tipo de tiempo',
                     'max-negative-cap'                    => 'Límite negativo máximo',
@@ -52,6 +54,7 @@ return [
             'requires-allocation'       => 'Requiere asignación',
             'allocation-approval'       => 'Aprobación de asignación',
             'employee-request'          => 'Solicitud de empleado',
+            'is-active'                 => 'Activo',
         ],
 
         'filters' => [
@@ -136,6 +139,7 @@ return [
                     'public-holiday-included'             => 'Días festivos incluidos',
                     'allow-to-attach-supporting-document' => 'Permitir adjuntar documento justificativo',
                     'show-on-dashboard'                   => 'Mostrar en el panel',
+                    'is-active'                           => 'Activo',
                     'kind-off-time'                       => 'Tipo de tiempo',
                     'max-negative-cap'                    => 'Límite negativo máximo',
                     'kind-of-time'                        => 'Tipo de ausencia',

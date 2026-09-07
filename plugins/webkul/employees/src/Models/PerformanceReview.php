@@ -5,6 +5,7 @@ namespace Webkul\Employee\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Auth;
 use Webkul\Support\Models\Company;
 
 class PerformanceReview extends Model
@@ -51,5 +52,18 @@ class PerformanceReview extends Model
     public function goals(): HasMany
     {
         return $this->hasMany(PerformanceGoal::class, 'review_id');
+    }
+
+    protected static function boot()
+    {
+        parent::boot();
+
+        static::creating(function (self $review): void {
+            // PerformanceService::launch() always passes company_id
+            // explicitly, so this only fires as a safety net for any other
+            // creation path (Filament's inherited Create action, tinker,
+            // future code) that doesn't.
+            $review->company_id ??= Auth::user()?->default_company_id;
+        });
     }
 }

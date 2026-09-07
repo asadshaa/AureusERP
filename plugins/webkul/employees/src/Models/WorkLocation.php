@@ -55,6 +55,7 @@ class WorkLocation extends Model
 
         static::creating(function ($workLocation) {
             $workLocation->creator_id ??= Auth::id();
+            $workLocation->company_id ??= Auth::user()?->default_company_id;
         });
     }
 

@@ -33,6 +33,8 @@ return [
                     'public-holiday-included'             => 'تشمل العطل الرسمية',
                     'allow-to-attach-supporting-document' => 'السماح بإرفاق مستند داعم',
                     'show-on-dashboard'                   => 'العرض في لوحة التحكم',
+                    'is-active'                           => 'نشط',
+                    'is-active-helper'                    => 'لا يمكن اختيار أنواع الإجازات غير النشطة عند طلب الموظفين للإجازة.',
                     'allow-negative-cap'                  => 'السماح بالرصيد السالب',
                     'kind-off-time'                       => 'نوع الوقت',
                     'max-negative-cap'                    => 'الحد الأقصى للرصيد السالب',
@@ -52,6 +54,7 @@ return [
             'requires-allocation'       => 'يتطلب تخصيص',
             'allocation-approval'       => 'موافقة التخصيص',
             'employee-request'          => 'طلب الموظف',
+            'is-active'                 => 'نشط',
         ],
 
         'filters' => [
@@ -136,6 +139,7 @@ return [
                     'public-holiday-included'             => 'تشمل العطل الرسمية',
                     'allow-to-attach-supporting-document' => 'السماح بإرفاق مستند داعم',
                     'show-on-dashboard'                   => 'العرض في لوحة التحكم',
+                    'is-active'                           => 'نشط',
                     'kind-off-time'                       => 'نوع الوقت',
                     'max-negative-cap'                    => 'الحد الأقصى للرصيد السالب',
                     'kind-of-time'                        => 'نوع الإجازة',

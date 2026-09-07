@@ -264,6 +264,69 @@ it('routes leave through the shared approval engine with company isolation', fun
         ->and($approved->rejection_reason)->toBeNull();
 });
 
+it('routes a leave submitted by a manager on an employee\'s behalf to that employee\'s manager, not the submitter\'s', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $managerUser = hrPlatformUser($company);
+    $employeeUser = hrPlatformUser($company);
+    hrPlatformGrant($managerUser, 'hr_approve_leave');
+    $this->actingAs($managerUser);
+    // The manager has no manager above them — reproduces the real setup
+    // (e.g. an Operations manager at the top of their own hierarchy).
+    $manager = hrPlatformEmployee($company, $managerUser, 'Standalone Manager');
+    $employee = hrPlatformEmployee($company, $employeeUser, 'Managed Employee', $manager);
+    $leaveType = LeaveType::query()->create([
+        'company_id' => $company->id,
+        'name'       => 'Behalf Leave',
+        'is_active'  => true,
+    ]);
+    $leave = Leave::query()->create([
+        'company_id'          => $company->id,
+        'employee_company_id' => $company->id,
+        'employee_id'         => $employee->id,
+        'user_id'             => $employeeUser->id,
+        'holiday_status_id'   => $leaveType->id,
+        'request_date_from'   => '2026-09-16',
+        'request_date_to'     => '2026-09-18',
+        'date_from'           => '2026-09-16',
+        'date_to'             => '2026-09-18',
+        'number_of_days'      => 3,
+        'state'               => LeaveState::CONFIRM,
+    ]);
+
+    // This is the shape of workflow the Approval Workflow screen actually
+    // produces (Settings → Approval Workflows): a "requester manager"
+    // hierarchy-route step, not a specific named approver.
+    $workflow = \Webkul\Support\Models\ApprovalWorkflow::query()->create([
+        'company_id'   => $company->id,
+        'name'         => 'Leave Request Approval',
+        'request_type' => 'leave_request',
+        'priority'     => 100,
+        'is_active'    => true,
+    ]);
+    $workflow->steps()->create([
+        'sequence'           => 1,
+        'name'               => 'Manager Approval',
+        'hierarchy_route'    => 'requester_manager',
+        'required_approvals' => 1,
+    ]);
+
+    // The manager submits on the employee's behalf (a normal, permitted
+    // action via hr_approve_leave) rather than the employee submitting
+    // their own request.
+    $service = app(LeaveApprovalService::class);
+    $service->submit($leave, $managerUser);
+
+    $approvalRequest = $leave->fresh()->approvalRequest;
+    expect($approvalRequest->requester_id)->toBe($employeeUser->id)
+        ->and(app(ApprovalEngine::class)->canAct($approvalRequest, $managerUser))->toBeTrue();
+
+    $approved = $service->approve($leave->fresh(), $managerUser, 'Approved on behalf submission');
+
+    expect($approved->state)->toBe(LeaveState::VALIDATE_TWO)
+        ->and($approved->approvalRequest->status)->toBe('approved');
+});
+
 it('sends an approved financial employee request to a balanced draft accounting journal exactly once', function (): void {
     $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
     $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
@@ -590,6 +653,81 @@ it('adds a record-level hierarchy check to LeavePolicy and LeaveAllocationPolicy
         ->and(Gate::forUser($managerUser)->allows('update', $allocation))->toBeTrue()
         ->and(Gate::forUser($unrelatedUser)->allows('view', $allocation))->toBeFalse()
         ->and(Gate::forUser($outsiderUser)->allows('update', $allocation))->toBeFalse();
+});
+
+it('defaults company_id from the session when creating an employee, job position, work location, or performance review/goal without one', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $user = hrPlatformUser($company);
+    $this->actingAs($user);
+
+    // The Employee create form's Company field lives on a secondary tab and
+    // isn't required, so a submission that never visits that tab omits
+    // company_id entirely — reproduced here exactly that way.
+    $employee = Employee::query()->create(['name' => 'Session Default Employee']);
+    expect($employee->company_id)->toBe($company->id);
+
+    $jobPosition = EmployeeJobPosition::query()->create(['name' => 'Session Default Job']);
+    expect($jobPosition->company_id)->toBe($company->id);
+
+    $workLocation = \Webkul\Employee\Models\WorkLocation::query()->create(['name' => 'Session Default Location']);
+    expect($workLocation->company_id)->toBe($company->id);
+
+    $cycle = PerformanceCycle::query()->create([
+        'company_id' => $company->id,
+        'name'       => 'Session Default Cycle',
+        'starts_on'  => '2026-01-01',
+        'ends_on'    => '2026-12-31',
+        'status'     => 'active',
+    ]);
+    $review = \Webkul\Employee\Models\PerformanceReview::query()->create([
+        'cycle_id'    => $cycle->id,
+        'employee_id' => $employee->id,
+    ]);
+    expect($review->company_id)->toBe($company->id);
+
+    // PerformanceGoal prefers its parent review's company over the session,
+    // since a goal can be written outside a request context (no Auth user).
+    $goal = \Webkul\Employee\Models\PerformanceGoal::query()->create([
+        'review_id' => $review->id,
+        'title'     => 'Session Default Goal',
+    ]);
+    expect($goal->company_id)->toBe($company->id);
+});
+
+it('defaults a new leave type to active so it is selectable on the employee time-off request form, while an explicitly inactive one stays excluded', function (): void {
+    $company = Company::factory()->create(['is_active' => true]);
+    $user = hrPlatformUser($company);
+    $this->actingAs($user);
+
+    // LeaveTypeResource's create form never set `is_active`, and the column
+    // is nullable with no DB default — so every leave type created through
+    // the standard admin UI ended up with is_active = NULL. The dropdown on
+    // the employee time-off request form (TimeOffHelper) filters strictly on
+    // `is_active = true`, and NULL never satisfies that, so the leave type
+    // was silently unselectable by any employee. Reproduced here exactly as
+    // the form did: create without passing is_active at all.
+    $activeLeaveType = LeaveType::query()->create([
+        'company_id' => $company->id,
+        'name'       => 'Regression Active Leave',
+    ]);
+    expect($activeLeaveType->is_active)->toBeTrue();
+
+    $inactiveLeaveType = LeaveType::query()->create([
+        'company_id' => $company->id,
+        'name'       => 'Regression Inactive Leave',
+        'is_active'  => false,
+    ]);
+    expect($inactiveLeaveType->is_active)->toBeFalse();
+
+    // Same filter TimeOffHelper applies to populate the Time Off Type select.
+    $selectableNames = LeaveType::query()
+        ->where('is_active', true)
+        ->where(fn ($query) => $query->whereNull('company_id')->orWhere('company_id', $user->default_company_id))
+        ->pluck('name');
+
+    expect($selectableNames)->toContain('Regression Active Leave')
+        ->and($selectableNames)->not->toContain('Regression Inactive Leave');
 });
 
 it('scopes the allocation, employee-skill, attendance, performance-review and timesheet resources to company and HR hierarchy', function (): void {

@@ -1,0 +1,474 @@
+% HR Workflow Handbook — Aureus ERP (Truck It In (Private) Limited)
+% Compile with pdfLaTeX on Overleaf (default compiler is fine).
+%
+% Structure:
+%   Part I   — Workflow Reference   (how each HR process actually works today)
+%   Part II  — Issues Found & Fixed (transparency log for this testing pass)
+%   Part III — Questions for HR Review (kept separate from Part I, as requested)
+%   Sign-off block
+
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.4cm]{geometry}
+\usepackage[table]{xcolor}
+\usepackage{enumitem}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{titlesec}
+\usepackage{fancyhdr}
+\usepackage{parskip}
+\usepackage{amssymb}
+\usepackage{tcolorbox}
+\tcbuselibrary{skins,breakable}
+\usepackage[colorlinks=true,linkcolor=accentdark,urlcolor=accentdark]{hyperref}
+
+% ---------- palette ----------
+\definecolor{accent}{HTML}{2F5D50}
+\definecolor{accentdark}{HTML}{1D3A32}
+\definecolor{accentsoft}{HTML}{DBE8E2}
+\definecolor{amberc}{HTML}{8A5A12}
+\definecolor{ambersoft}{HTML}{F3E3C8}
+\definecolor{inkc}{HTML}{1C2422}
+\definecolor{inksoft}{HTML}{4D5A56}
+\definecolor{linec}{HTML}{D7DDDA}
+\definecolor{surface2}{HTML}{EEF1F0}
+
+% ---------- section styling ----------
+\titleformat{\section}
+  {\large\bfseries\color{inkc}}{\thesection}{0.6em}{}
+\titleformat{\subsection}
+  {\bfseries\color{accentdark}}{}{0em}{}
+\titlespacing*{\subsection}{0pt}{1.4em}{0.3em}
+
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancyhead[L]{\small\color{inksoft} HR Workflow Handbook}
+\fancyhead[R]{\small\color{inksoft} Aureus ERP \textperiodcentered\ Truck It In (Private) Limited}
+\fancyfoot[C]{\small\color{inksoft} \thepage}
+
+% ---------- helper boxes ----------
+\newtcolorbox{statusbox}[1]{
+  colback=accentsoft, colframe=accent, boxrule=0.4pt, arc=2pt,
+  left=8pt, right=8pt, top=4pt, bottom=4pt, boxsep=1pt,
+  fontupper=\small\bfseries\color{accentdark}, title={#1}, titlerule=0pt
+}
+\newtcolorbox{callout}{
+  colback=accentsoft, colframe=linec, leftrule=3mm, colframe=accent,
+  arc=1pt, boxrule=0.3pt, left=10pt, right=10pt, top=8pt, bottom=8pt
+}
+\newtcolorbox{note}{
+  colback=surface2, colframe=linec, boxrule=0.4pt, arc=1pt,
+  left=9pt, right=9pt, top=6pt, bottom=6pt
+}
+\newtcolorbox{questionsbox}[1]{
+  colback=white, colframe=amberc, boxrule=0.6pt, arc=2pt, breakable,
+  left=10pt, right=10pt, top=8pt, bottom=8pt,
+  title={\color{amberc}\bfseries #1}, coltitle=amberc,
+  fonttitle=\bfseries, colbacktitle=ambersoft, boxsep=2pt
+}
+
+\newcommand{\eyebrow}[1]{{\small\ttfamily\color{accentdark} #1}\par\vspace{2pt}}
+\newcommand{\wftitle}[1]{{\Large\bfseries\color{inkc} #1}\par\vspace{6pt}}
+\newcommand{\qitem}{\item[$\square$]}
+
+\title{\vspace{-2em}{\bfseries\Huge HR Workflow Handbook}\\[6pt]
+\large\color{inksoft} A step-by-step reference for every HR process in Aureus ERP,\\
+plus the exact questions to walk through with HR before testing continues}
+\author{}
+\date{\small Company on file: Truck It In (Private) Limited \quad\textbar\quad
+Environment: aureuserp @ 127.0.0.1:3307 \quad\textbar\quad Prepared: 7 Sep 2026}
+
+\begin{document}
+\maketitle
+\thispagestyle{fancy}
+
+\begin{callout}
+\textbf{How to use this document.} Part~I explains how each HR process works today, step by step, in plain language. Part~II is a short transparency log of what we found broken and fixed this week. Part~III — kept deliberately separate — is the exact list of questions to walk through with HR, so her feedback comes back as concrete, actionable corrections rather than a general ``looks fine.''
+\end{callout}
+
+\tableofcontents
+
+\newpage
+\part*{Part I --- Workflow Reference}
+\addcontentsline{toc}{part}{Part I --- Workflow Reference}
+
+\section*{Before the workflows --- four ideas used everywhere}
+\eyebrow{REFERENCE}
+Four concepts repeat across almost every process below. Understanding them once makes the rest of this document much shorter to read.
+
+\begin{enumerate}[label=\textbf{\arabic*.}, leftmargin=1.6em]
+  \item \textbf{Company boundary.} Every record --- employee, leave, timesheet, candidate --- belongs to exactly one company. A person only ever sees records from their own company.
+  \item \textbf{Login vs.\ HR record.} A \emph{User} is a login (email + password). An \emph{Employee} is the HR record (job title, salary, manager, leave balance). Most people have both, linked together --- but not every login needs an employee record, and not every employee needs a login.
+  \item \textbf{Reporting hierarchy.} Who can see or approve for whom is decided by three things together: direct manager (and their manager, and so on), department, and team. Someone with the HR administrator override can see everyone regardless.
+  \item \textbf{One shared approval engine.} Leave, timesheets, salary changes, and expense claims all route through the \emph{same} approval mechanism, just configured differently per request type. Learn it once in Time Off (\S 3) and every other approval works the same way.
+\end{enumerate}
+
+\section{Employee onboarding}
+\eyebrow{\S01 \textperiodcentered\ People}
+\begin{statusbox}{VERIFIED IN THIS ENVIRONMENT}\end{statusbox}
+
+Creating a new employee record. This is separate from creating a login --- HR fills in the person's details, and the system quietly builds the supporting records around them.
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item HR opens \textbf{Employees → New} and fills in name, job title, department, manager and company.
+  \item \textbf{If the Company field is left blank} (common --- it sits on a secondary tab): the system fills it in automatically from the HR user's own company.
+  \item \textbf{If it was set explicitly:} the chosen company is used as-is.
+  \item On save, a matching \emph{Partner} contact record is created automatically and linked back to the employee.
+  \item A first status-history entry is logged (e.g.\ ``Active,'' joining date).
+\end{enumerate}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{4cm}p{9.5cm}@{}}
+\toprule
+\textbf{Who does this} & HR administrator, or a manager with employee-management access. \\
+\textbf{Automatic side effects} & Linked contact (Partner) record; status-history entry marking the employee active. \\
+\textbf{Why the auto-fill matters} & Without it, a record with no company becomes invisible to every company-scoped screen --- including the confirmation page right after saving. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+\textbf{Fixed this week:} the company auto-fill above (and the same fix for job positions, work locations, and performance records) was missing until 7 Sep --- see Part~II.
+\end{note}
+
+\section{Reporting lines \& who can see whom}
+\eyebrow{\S02 \textperiodcentered\ Access}
+\begin{statusbox}{VERIFIED IN THIS ENVIRONMENT}\end{statusbox}
+
+Determines what any one person sees in Employees, Time Off, Timesheets, Performance and Attendance. Checked every time a list of employees or their records is shown.
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item Person opens an HR screen.
+  \item \textbf{If they hold the HR ``view all'' override:} they see every employee in their company --- skip to step 6.
+  \item Otherwise, the system walks their manager chain downward (direct and indirect reports).
+  \item It adds their department (and any sub-departments).
+  \item It adds any team they manage. The union of steps 3--5 is what they can see.
+  \item For any target record: if its company does not match the viewer's company, access is denied regardless of hierarchy; otherwise access is allowed.
+\end{enumerate}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{7.2cm}p{6.3cm}@{}}
+\toprule
+\textbf{Scenario} & \textbf{Result} \\
+\midrule
+Manager viewing a direct report & Allowed --- full record \\
+Manager viewing an unrelated employee, same company & Not allowed unless same department/team \\
+Anyone viewing an employee in a different company & Always blocked, even for HR admins without cross-company grant \\
+HR admin with ``view all records'' permission & Sees everyone in their own company \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+Confirmed live: logged in as a manager with three visible reports, a fourth employee outside the hierarchy correctly did not appear.
+\end{note}
+
+\section{Time off \& leave}
+\eyebrow{\S03 \textperiodcentered\ Leave}
+\begin{statusbox}{VERIFIED IN THIS ENVIRONMENT}\end{statusbox}
+
+Four stages: HR defines the kinds of leave that exist, HR allocates a balance to each employee, the employee requests time off against that balance, and the manager approves it.
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item \textbf{HR (one-time setup):} create a Leave Type (e.g.\ Annual Leave), then create an Allocation (e.g.\ 14 days for one employee), then approve that allocation.
+  \item \textbf{Employee:} goes to My Time Off → New, picks a Leave Type and a date range.
+  \item \textbf{If the allocated balance is insufficient:} the request is blocked with a message and cannot be submitted.
+  \item \textbf{If sufficient:} the request is created in state \texttt{confirm}.
+  \item Employee clicks ``Submit for Approval''; the request routes to the requester's direct manager.
+  \item \textbf{Manager approves:} state becomes \texttt{validate\_two} and the days are deducted from the balance.
+  \item \textbf{Manager rejects:} state becomes \texttt{refuse} and the balance is left untouched.
+\end{enumerate}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{4.4cm}p{9.1cm}@{}}
+\toprule
+\textbf{Screen path (employee)} & Time Off → My Time → My Time Off → New \\
+\textbf{Screen path (manager)} & Time Off → Management → Time Off → Waiting For Me \\
+\textbf{Setup path (HR)} & Time Off → Configurations → Leave Types, and → Allocations \\
+\textbf{One-time setup needed} & An approval routing rule for ``leave requests'' must exist per company \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+\textbf{Two things HR must set up once per company} before anyone can request leave: (1)~at least one active Leave Type, and (2)~an Approval Workflow for leave requests (Settings → Approval Workflows). Both were missing for this company until today --- see Part~II.
+\end{note}
+
+\section{Attendance}
+\eyebrow{\S04 \textperiodcentered\ Time tracking}
+\begin{statusbox}{VERIFIED BY AUTOMATED TEST --- NOT YET WALKED THROUGH ON SCREEN}\end{statusbox}
+
+Records a single day's check-in/check-out against the employee's scheduled hours, and the system works out lateness and worked hours on its own.
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item An attendance record is saved with the scheduled shift and the actual check-in/check-out times.
+  \item The system computes worked hours, late minutes, and early-departure minutes automatically.
+\end{enumerate}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Example} & \textbf{Scheduled} & \textbf{Actual} & \textbf{System computes} \\
+\midrule
+Sample day tested & 09:00--17:00 & 09:15--16:45 & 7.5 hrs worked; 15 min late; 15 min early departure \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+Confirmed by an automated test that reproduces exactly this scenario. Not yet clicked through on the live screens in this session --- worth a manual pass before relying on it for payroll-adjacent decisions.
+\end{note}
+
+\section{Performance reviews}
+\eyebrow{\S05 \textperiodcentered\ Growth}
+\begin{statusbox}{VERIFIED BY AUTOMATED TEST --- NOT YET WALKED THROUGH ON SCREEN}\end{statusbox}
+
+A review cycle (e.g.\ ``2026 Annual Review'') is launched once and creates one review per employee automatically. Each review has two independent scores.
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item HR launches a Performance Cycle with a start and end date.
+  \item A Review is created for every active employee automatically.
+  \item Employee submits a self-rating with comments.
+  \item Manager submits a manager rating with comments.
+  \item Review status becomes \texttt{completed}.
+  \item \emph{Optional:} individual Goals can be attached to a review, each with its own weight and target value.
+\end{enumerate}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Example tested} & \textbf{Self rating} & \textbf{Manager rating} & \textbf{Final status} \\
+\midrule
+2026 Annual Review, one employee & 4.1 / 5 & 4.4 / 5 & completed \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Timesheets}
+\eyebrow{\S06 \textperiodcentered\ Time tracking}
+\begin{statusbox}{VERIFIED BY AUTOMATED TEST --- NOT YET WALKED THROUGH ON SCREEN}\end{statusbox}
+
+A logged line of billable or internal work goes through the same submit-then-approve pattern as leave, and locks once approved so it can be relied on for billing.
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item Employee logs hours; timesheet starts in state \texttt{draft}.
+  \item Employee submits it for approval.
+  \item \textbf{Manager approves:} state becomes \texttt{approved} and the entry locks --- auditable, recording who approved it and when.
+  \item \textbf{Manager rejects:} state becomes \texttt{rejected} and it is sent back to the employee.
+\end{enumerate}
+
+\begin{note}
+Every approval records who approved it and when --- the same underlying mechanism used for leave and salary changes (see the four ideas at the start of Part~I).
+\end{note}
+
+\section{Recruitment \& hiring}
+\eyebrow{\S07 \textperiodcentered\ Hiring}
+\begin{statusbox}{VERIFIED BY AUTOMATED TEST --- NOT YET WALKED THROUGH ON SCREEN}\end{statusbox}
+
+From an open role to a hired employee, with no manual re-typing of the candidate's details at any step --- and no duplicate employee record if the same offer gets processed twice.
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item A Job Position is published (e.g.\ company website, LinkedIn).
+  \item A Candidate applies --- either entered manually, or pulled in automatically from a job board or API.
+  \item An Applicant record tracks screening, interview and assessment scores.
+  \item \textbf{If the offer status is ``accepted'':} the applicant is converted to an Employee.
+  \item \textbf{If conversion has already run before for this applicant:} the existing employee is returned --- no duplicate is created.
+  \item \textbf{If this is the first conversion:} a new Employee is created and the application is marked \texttt{hired}.
+\end{enumerate}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{4cm}p{9.5cm}@{}}
+\toprule
+\textbf{Duplicate protection} & Re-running the conversion, or re-importing the same external application ID, always resolves to the same one candidate/applicant/employee --- never a second copy. \\
+\textbf{Company boundary} & A candidate imported for one company can never be attached to another company's job posting, even via the automated intake path. \\
+\textbf{Reporting} & Headcount, funnel-by-stage, and average time-to-hire are available per company once hires start coming through. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Employee \& expense requests}
+\eyebrow{\S08 \textperiodcentered\ Money}
+\begin{statusbox}{VERIFIED BY AUTOMATED TEST --- NOT YET WALKED THROUGH ON SCREEN}\end{statusbox}
+
+Where HR meets Accounting: an approved financial request (an expense claim, reimbursement, travel advance, etc.) automatically becomes a draft accounting entry --- never posted automatically, always left for Accounting to review.
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item Employee files a request (e.g.\ ``Client travel reimbursement,'' PKR 5{,}000) and submits it for approval.
+  \item \textbf{Finance/manager rejects:} state becomes \texttt{rejected}.
+  \item \textbf{Finance/manager approves:} state becomes \texttt{approved}, and a balanced draft accounting journal is created automatically --- debit expense, credit payable.
+  \item The journal sits in Accounting as a draft, awaiting Accounting's own posting.
+\end{enumerate}
+
+\begin{center}
+\small
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\textbf{Example tested} & \textbf{Amount} & \textbf{Debit} & \textbf{Credit} & \textbf{Journal state} \\
+\midrule
+Client travel reimbursement & PKR 5{,}000.00 & Expense account & Payable account & draft \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+Re-approving or re-processing the same request never creates a second journal entry --- only ever exactly one, kept in sync.
+\end{note}
+
+\section{Sensitive record changes}
+\eyebrow{\S09 \textperiodcentered\ Compliance}
+\begin{statusbox}{VERIFIED IN THIS ENVIRONMENT}\end{statusbox}
+
+A short, fixed list of an employee's most sensitive fields can never be edited directly by anyone, even HR --- a change to any of them has to go through approval first, and the audit trail keeps a written reason.
+
+\begin{enumerate}[leftmargin=1.8em]
+  \item Someone proposes a change to a protected field; an approval request is created with both the old and new values recorded.
+  \item \textbf{Approver rejects:} no change is made.
+  \item \textbf{Approver approves (with a written reason):} the change is applied to the employee record, and the reason is permanently kept on the approval's audit trail.
+\end{enumerate}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{4cm}p{9.5cm}@{}}
+\toprule
+\textbf{Protected fields} & \texttt{identification\_id}, \texttt{passport\_id}, \texttt{ssnid}, \texttt{sinid}, \texttt{bank\_account\_id}, \texttt{salary\_grade}, \texttt{base\_salary}, \texttt{salary\_currency\_id} \\
+\textbf{Anything not on that list} & Quietly ignored, even if bundled into the same request --- e.g.\ a name change submitted alongside a salary change is dropped; only the salary change goes through approval. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{note}
+Known, deliberate scope limit: this protects the field from silent edits \emph{through the approval workflow}. It does not yet stop someone with direct database or admin-tooling access --- that is a separate, larger control and out of scope for this pass.
+\end{note}
+
+\newpage
+\part*{Part II --- Issues Found \& Fixed This Week}
+\addcontentsline{toc}{part}{Part II --- Issues Found \& Fixed This Week}
+
+For transparency --- things that did not work correctly during testing, found and corrected in the same session. Included so HR is not the one who finds these in production.
+
+\begin{longtable}{@{}p{2.6cm}p{5.6cm}p{5.6cm}c@{}}
+\toprule
+\textbf{Area} & \textbf{What was wrong} & \textbf{Fix} & \\
+\midrule
+\endhead
+Employee onboarding &
+Leaving the Company field blank on the create form (easy to miss --- it's on a second tab) made the new employee invisible everywhere, including the confirmation screen. &
+Now defaults to the HR user's own company automatically. Same fix applied to job positions, work locations, and performance records. &
+\cellcolor{accentsoft}\textcolor{accentdark}{\textbf{fixed}} \\
+\addlinespace
+Time off &
+A Leave Type created through the normal admin screen had no way to be marked active --- so it silently never appeared in anyone's leave-request dropdown. &
+Added the missing Active toggle to the Leave Type screen, defaulted new ones to active, and fixed the existing ``Annual Leave'' record. &
+\cellcolor{accentsoft}\textcolor{accentdark}{\textbf{fixed}} \\
+\addlinespace
+Time off &
+No approval routing existed for leave requests in this company at all, so ``Submit for Approval'' failed outright with a server error. &
+Configured the approval routing (leave $\rightarrow$ requester's direct manager), and added ``leave request'' to the suggested list so it's easy to find next time. &
+\cellcolor{accentsoft}\textcolor{accentdark}{\textbf{fixed}} \\
+\bottomrule
+\end{longtable}
+
+\begin{note}
+This is a running log for this testing pass --- earlier phases (invoicing, bank reconciliation, HR authorization) each closed with their own detailed reports, available on request.
+\end{note}
+
+\newpage
+\part*{Part III --- Questions for HR Review}
+\addcontentsline{toc}{part}{Part III --- Questions for HR Review}
+
+\begin{callout}
+These are kept separate from Part~I on purpose. Walk through each block below with HR \emph{after} she has read the matching section --- her answers tell us exactly what to change, and where.
+\end{callout}
+
+\begin{questionsbox}{\S01 --- Onboarding}
+\begin{itemize}[leftmargin=1.6em]
+  \qitem Who is actually allowed to create an employee record --- HR only, or can a manager add their own hire?
+  \qitem Is there anything required before someone counts as ``active'' that the system doesn't ask for (signed contract, ID check, etc.)?
+\end{itemize}
+\end{questionsbox}
+
+\begin{questionsbox}{\S02 --- Reporting lines \& visibility}
+\begin{itemize}[leftmargin=1.6em]
+  \qitem Should a manager see their whole department, or just people who report to them directly? (System currently does both --- manager chain \emph{and} department \emph{and} team.)
+  \qitem Does HR need to see every company, or only the one they're assigned to?
+\end{itemize}
+\end{questionsbox}
+
+\begin{questionsbox}{\S03 --- Time off}
+\begin{itemize}[leftmargin=1.6em]
+  \qitem Is manager approval the \emph{only} approval step, or does HR/a second person also need to sign off for leave? (System is single-step right now.)
+  \qitem What leave types should actually exist (Annual, Sick, Casual, Unpaid\ldots) and how many days does each role get?
+  \qitem Should HR be notified when someone requests leave, even if they're not the approver?
+\end{itemize}
+\end{questionsbox}
+
+\begin{questionsbox}{\S04 --- Attendance}
+\begin{itemize}[leftmargin=1.6em]
+  \qitem Is 15 minutes late actually ``late,'' or is there a grace period (e.g.\ 10 minutes) before it counts?
+\end{itemize}
+\end{questionsbox}
+
+\begin{questionsbox}{\S05 --- Performance}
+\begin{itemize}[leftmargin=1.6em]
+  \qitem How often do review cycles actually run --- annual, twice a year?
+  \qitem Is self-rating + manager-rating the whole process, or is there a final HR calibration step missing?
+\end{itemize}
+\end{questionsbox}
+
+\begin{questionsbox}{\S06 --- Timesheets}
+\begin{itemize}[leftmargin=1.6em]
+  \qitem Is manager approval enough, or does Finance also sign off on billable hours before invoicing?
+\end{itemize}
+\end{questionsbox}
+
+\begin{questionsbox}{\S07 --- Recruitment}
+\begin{itemize}[leftmargin=1.6em]
+  \qitem Does an accepted offer need budget/Finance sign-off, or is Recruitment/HR's decision final?
+\end{itemize}
+\end{questionsbox}
+
+\begin{questionsbox}{\S08 --- Expense requests}
+\begin{itemize}[leftmargin=1.6em]
+  \qitem What expense categories should exist, and should large amounts route to someone above the direct manager?
+\end{itemize}
+\end{questionsbox}
+
+\begin{questionsbox}{\S09 --- Sensitive changes}
+\begin{itemize}[leftmargin=1.6em]
+  \qitem Is that protected-field list complete? Anything missing, like job title or termination date?
+  \qitem Should salary changes specifically require Finance approval, not just any manager?
+\end{itemize}
+\end{questionsbox}
+
+\vspace{1.5em}
+\noindent\textbf{Reporting back:} you don't need to translate her answers into system language --- just note, per section, what she said is different from what's described (e.g.\ \emph{``\S03 --- leave needs two approvals: manager then HR, not just manager''}, or \emph{``\S08 --- anything over PKR 20{,}000 needs the Finance Manager, not the direct manager''}). Each answer becomes a concrete configuration or code change.
+
+\newpage
+\section*{Review \& sign-off}
+\addcontentsline{toc}{section}{Review \& sign-off}
+
+\noindent
+\begin{tabular}{@{}p{3.4cm}p{10cm}@{}}
+\textbf{Reviewed by} & \rule{9cm}{0.4pt} \\[1.6em]
+\textbf{Role} & \rule{9cm}{0.4pt} \\[1.6em]
+\textbf{Date} & \rule{9cm}{0.4pt} \\[1.6em]
+\textbf{Sections needing changes} & \rule{9cm}{0.4pt} \\[1.6em]
+ & \rule{9cm}{0.4pt} \\[1.6em]
+ & \rule{9cm}{0.4pt} \\
+\end{tabular}
+
+\vspace{2em}
+\begin{center}
+\small\color{inksoft}
+Aureus ERP \textperiodcentered\ HR Workflow Handbook \textperiodcentered\ generated from the live test environment, 7 Sep 2026
+\end{center}
+
+\end{document}

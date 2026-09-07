@@ -63,7 +63,7 @@ class ApprovalWorkflowResource extends Resource
                 TextInput::make('request_type')->required()->maxLength(100)->datalist([
                     'journal_posting', 'manual_mapping', 'account_master_change', 'party_master_change',
                     'exchange_rate_change', 'credit_note', 'write_off', 'reversal', 'import_deletion',
-                    'employee_request', 'expense_claim', 'payroll_run',
+                    'employee_request', 'expense_claim', 'payroll_run', 'leave_request',
                     'employee_sensitive_change', 'timesheet_submission', 'employee_expense_claim',
                     'employee_reimbursement', 'employee_travel', 'employee_loan', 'employee_salary_advance',
                 ]),

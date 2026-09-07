@@ -33,6 +33,8 @@ return [
                     'public-holiday-included'             => 'Public Holiday Included',
                     'allow-to-attach-supporting-document' => 'Allow to Attach Supporting Document',
                     'show-on-dashboard'                   => 'Show on Dashboard',
+                    'is-active'                           => 'Active',
+                    'is-active-helper'                    => 'Inactive leave types cannot be selected when employees request time off.',
                     'allow-negative-cap'                  => 'Allow Negative Cap',
                     'kind-off-time'                       => 'Kind of Time',
                     'max-negative-cap'                    => 'Max Negative Cap',
@@ -52,6 +54,7 @@ return [
             'requires-allocation'       => 'Requires Allocation',
             'allocation-approval'       => 'Allocation Approval',
             'employee-request'          => 'Employee Request',
+            'is-active'                 => 'Active',
         ],
 
         'filters' => [
@@ -136,6 +139,7 @@ return [
                     'public-holiday-included'             => 'Public Holiday Included',
                     'allow-to-attach-supporting-document' => 'Allow to Attach Supporting Document',
                     'show-on-dashboard'                   => 'Show on Dashboard',
+                    'is-active'                           => 'Active',
                     'kind-off-time'                       => 'Kind of Time',
                     'max-negative-cap'                    => 'Max Negative Cap',
                     'kind-of-time'                        => 'Kind of Time Off',

@@ -81,6 +81,7 @@ class EmployeeJobPosition extends Model implements Sortable
 
         static::creating(function ($employeeJobPosition) {
             $employeeJobPosition->creator_id ??= Auth::id();
+            $employeeJobPosition->company_id ??= Auth::user()?->default_company_id;
         });
     }
 

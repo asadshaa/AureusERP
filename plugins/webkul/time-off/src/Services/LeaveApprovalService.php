@@ -15,7 +15,7 @@ class LeaveApprovalService
 
     public function submit(Leave $leave, User $requester): ApprovalRequest
     {
-        $leave->loadMissing('employee');
+        $leave->loadMissing('employee.user');
         if (! $leave->employee || (int) $leave->employee->company_id !== (int) $leave->company_id) {
             throw new RuntimeException('The leave employee does not belong to the leave company.');
         }
@@ -29,9 +29,17 @@ class LeaveApprovalService
             throw new RuntimeException('Only a new or refused leave request can be submitted.');
         }
 
+        // Hierarchy-route approval steps (e.g. "requester manager") resolve
+        // against whoever is recorded as the ApprovalRequest's requester. A
+        // manager or HR user is allowed to submit on an employee's behalf
+        // (the check above), but if we recorded *them* as the requester,
+        // hierarchy routing would resolve against *their* manager instead of
+        // the leave owner's — silently leaving the request unapprovable by
+        // anyone. Anchor the requester to the leave's own employee whenever
+        // they have a linked user account, regardless of who clicked submit.
         $approval = $this->approvals->submit(
             $leave,
-            $requester,
+            $leave->employee->user ?? $requester,
             'leave_request',
             null,
             [

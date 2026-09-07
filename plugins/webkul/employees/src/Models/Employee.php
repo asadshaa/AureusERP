@@ -301,6 +301,16 @@ class Employee extends Model
     {
         parent::boot();
 
+        static::creating(function (self $employee): void {
+            // The Company field on the create form lives on a secondary tab
+            // and isn't required, so it's easy to miss entirely, leaving
+            // company_id null — which then makes the record invisible to
+            // every company-scoped query, including the one that renders
+            // the record right after creating it. Default it from the
+            // session the same way Department/Leave/Timesheet already do.
+            $employee->company_id ??= Auth::user()?->default_company_id;
+        });
+
         static::saved(function (self $employee) {
             $employee->creator_id ??= Auth::id();
 
