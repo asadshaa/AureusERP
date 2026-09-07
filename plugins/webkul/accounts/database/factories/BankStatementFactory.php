@@ -46,4 +46,41 @@ class BankStatementFactory extends Factory
             'is_completed' => true,
         ]);
     }
+
+    public function accountingModule(array $overrides = []): static
+    {
+        return $this->state(function (array $attributes) use ($overrides) {
+            $companyId = $overrides['company_id'] ?? $attributes['company_id'];
+            $currencyId = $overrides['company_currency_id'] ?? $overrides['currency_id'] ?? 1;
+            $balance = $overrides['opening_balance'] ?? 10000;
+            $closing = $overrides['closing_balance'] ?? 10000;
+
+            return array_merge([
+                'currency_id'             => $currencyId,
+                'company_currency_id'     => $currencyId,
+                'bank_gl_account_id'      => null,
+                'statement_start_date'    => $attributes['date'] ?? now()->toDateString(),
+                'statement_end_date'      => $attributes['date'] ?? now()->toDateString(),
+                'opening_balance'         => $balance,
+                'total_debits'            => 0,
+                'total_credits'           => 0,
+                'closing_balance'         => $closing,
+                'balance_start'           => $balance,
+                'balance_end'             => $closing,
+                'balance_end_real'        => $closing,
+                'company_opening_balance' => $balance,
+                'company_total_debits'    => 0,
+                'company_total_credits'   => 0,
+                'company_closing_balance' => $closing,
+                'conversion_status'       => 'complete',
+                'bank_name'               => fake()->company().' Bank',
+                'bank_account_number'     => fake()->numerify('PK55DEMO################'),
+                'account_title'           => fake()->company(),
+                'original_filename'       => 'statement.csv',
+                'file_hash'               => hash('sha256', fake()->uuid()),
+                'parser'                  => 'hbl',
+                'import_status'           => 'validated',
+            ], $overrides);
+        });
+    }
 }

@@ -212,6 +212,23 @@ class Payment extends Model
 
         $account = Account::find($accountId);
 
+        // account_journal_payment_debit/credit_account_id is a single global
+        // setting with no per-company scoping, so on its own it always
+        // resolves to whichever company's account was configured first. If
+        // this payment's own company has an account with the same name (the
+        // convention used when a company's outstanding-receipts/payments
+        // accounts are set up), prefer that one instead so the payment
+        // doesn't post to a different company's chart of accounts.
+        if ($account && $this->company_id) {
+            $companyAccount = Account::where('name', $account->name)
+                ->whereHas('companies', fn ($query) => $query->where('companies.id', $this->company_id))
+                ->first();
+
+            if ($companyAccount) {
+                $account = $companyAccount;
+            }
+        }
+
         if (! $account) {
             $account = Account::find($defaultAccountSettings->transfer_account_id);
         }

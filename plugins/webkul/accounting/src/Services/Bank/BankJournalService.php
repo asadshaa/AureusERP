@@ -109,6 +109,8 @@ class BankJournalService
                 rateDate: (string) $line->rate_date?->toDateString(),
                 rateSource: (string) $line->rate_source,
                 rateType: (string) $line->rate_type,
+                offsetAccountId: $mapping->offset_account_id,
+                fsTagId: $mapping->fs_tag_id,
             );
 
             $mapping->update([
@@ -128,11 +130,26 @@ class BankJournalService
     {
         return DB::transaction(function () use ($mapping, $reviewer): Move {
             $mapping = BankTransactionMapping::query()->with(['statementLine.statement', 'transferMatch.incomingLine.mapping'])->lockForUpdate()->findOrFail($mapping->id);
+
+            if ($mapping->review_status !== BankReviewStatus::Approved && $mapping->review_status !== BankReviewStatus::Posted) {
+                throw new RuntimeException('Only approved transaction mappings can be posted.');
+            }
+
             $move = $mapping->move_id ? Move::query()->lockForUpdate()->find($mapping->move_id) : null;
             $move ??= $this->createDraft($mapping);
 
             if ($move->state === MoveState::POSTED) {
                 return $move;
+            }
+
+            $accounts = DB::table('accounts_account_move_lines')
+                ->join('accounts_accounts', 'accounts_accounts.id', '=', 'accounts_account_move_lines.account_id')
+                ->where('accounts_account_move_lines.move_id', $move->id)
+                ->select('accounts_accounts.id', 'accounts_accounts.is_group', 'accounts_accounts.deprecated')
+                ->get();
+
+            if ($accounts->some(fn ($acc) => $acc->is_group || $acc->deprecated)) {
+                throw new RuntimeException('Cannot post journal move referencing a group or deprecated account.');
             }
 
             $totals = DB::table('accounts_account_move_lines')
@@ -149,6 +166,9 @@ class BankJournalService
             DB::table('accounts_account_moves')->where('id', $move->id)->update([
                 'state'         => MoveState::POSTED->value,
                 'review_status' => 'posted',
+                // Drop the "Draft " prefix the entry was created with, so a
+                // posted entry is not labelled as a draft in the ledger.
+                'name'          => $mapping->map_reference,
                 'updated_at'    => now(),
             ]);
             DB::table('accounts_account_move_lines')->where('move_id', $move->id)->update([
@@ -240,12 +260,15 @@ class BankJournalService
         string $rateDate,
         string $rateSource,
         string $rateType,
+        ?int $offsetAccountId = null,
+        ?int $fsTagId = null,
     ): void {
         $now = now();
         DB::table('accounts_account_move_lines')->insert([
             [
                 'move_id'                  => $moveId, 'statement_id' => $statementId, 'statement_line_id' => $statementLineId,
                 'journal_id'               => $journalId, 'account_id' => $debitAccountId, 'company_id' => $companyId,
+                'fs_tag_id'                => ($offsetAccountId && $debitAccountId === $offsetAccountId) ? $fsTagId : null,
                 'partner_id'               => $partnerId,
                 'company_currency_id'      => $companyCurrencyId, 'currency_id' => $originalCurrencyId,
                 'original_currency_id'     => $originalCurrencyId, 'date' => $date,
@@ -262,6 +285,7 @@ class BankJournalService
             [
                 'move_id'                  => $moveId, 'statement_id' => $statementId, 'statement_line_id' => $statementLineId,
                 'journal_id'               => $journalId, 'account_id' => $creditAccountId, 'company_id' => $companyId,
+                'fs_tag_id'                => ($offsetAccountId && $creditAccountId === $offsetAccountId) ? $fsTagId : null,
                 'partner_id'               => $partnerId,
                 'company_currency_id'      => $companyCurrencyId, 'currency_id' => $originalCurrencyId,
                 'original_currency_id'     => $originalCurrencyId, 'date' => $date,

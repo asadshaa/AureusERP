@@ -109,25 +109,10 @@ class ImportRunResource extends Resource
                     ->authorize(AccountingPermissions::RunConfiguredImports)
                     ->visible(fn (ImportRun $record): bool => $record->failed_rows > 0)
                     ->action(function (ImportRun $record) {
-                        $headers = (array) ($record->summary['headers'] ?? []);
-                        $rows = $record->sourceRows()->where('status', 'error')->orderBy('source_row_number')->get();
+                        $csv = app(ImportExecutionService::class)->exportRejectedRows($record);
 
-                        return response()->streamDownload(function () use ($headers, $rows): void {
-                            $output = fopen('php://output', 'wb');
-                            if ($output === false) {
-                                return;
-                            }
-
-                            fputcsv($output, ['Source Row', ...$headers, 'Rejection Reasons'], ',', '"', '');
-                            foreach ($rows as $row) {
-                                $raw = (array) $row->raw_values;
-                                fputcsv($output, [
-                                    $row->source_row_number,
-                                    ...array_map(fn (string $header): mixed => $raw[$header] ?? null, $headers),
-                                    collect($row->messages)->pluck('message')->implode('; '),
-                                ], ',', '"', '');
-                            }
-                            fclose($output);
+                        return response()->streamDownload(function () use ($csv): void {
+                            echo $csv;
                         }, "{$record->reference}-rejected-rows.csv", ['Content-Type' => 'text/csv; charset=UTF-8']);
                     }),
             ]);

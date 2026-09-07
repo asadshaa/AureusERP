@@ -2,6 +2,7 @@
 
 namespace Webkul\Accounting\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Auth;
@@ -9,12 +10,20 @@ use Illuminate\Support\Str;
 use Webkul\Account\Models\Account;
 use Webkul\Account\Models\Journal;
 use Webkul\Account\Models\Move;
+use Webkul\Accounting\Database\Factories\ManualAdjustmentFactory;
 use Webkul\Accounting\Enums\ManualAdjustmentStatus;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\Company;
 
 class ManualAdjustment extends Model
 {
+    use HasFactory;
+
+    protected static function newFactory(): ManualAdjustmentFactory
+    {
+        return ManualAdjustmentFactory::new();
+    }
+
     protected $table = 'accounting_manual_adjustments';
 
     protected $guarded = [];

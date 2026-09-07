@@ -2071,8 +2071,8 @@ class AccountManager
             throw new Exception(__('accounts::account-manager.post-action-validate.lines-required'));
         }
 
-        if ($record->lines->some(fn ($line) => $line->account && $line->account->deprecated)) {
-            throw new Exception(__('accounts::account-manager.post-action-validate.account-deprecated'));
+        if ($record->lines->some(fn ($line) => $line->account && ($line->account->deprecated || $line->account->is_group))) {
+            throw new Exception(__('Cannot post move containing deprecated or group accounts.'));
         }
 
         if (! $record->journal) {

@@ -3,15 +3,22 @@
 namespace Webkul\Accounting\Models;
 
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Webkul\Accounting\Database\Factories\BusinessRuleFactory;
 use Webkul\Accounting\Models\Concerns\AuditsConfiguration;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\Company;
 
 class BusinessRule extends Model
 {
-    use AuditsConfiguration;
+    use AuditsConfiguration, HasFactory;
+
+    protected static function newFactory(): BusinessRuleFactory
+    {
+        return BusinessRuleFactory::new();
+    }
 
     protected $table = 'accounting_business_rules';
 

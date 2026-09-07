@@ -83,7 +83,11 @@ use Webkul\Support\Models\Currency;
 
 class JournalEntryResource extends Resource
 {
-    use HasResourcePermissionQuery;
+    // Aliased so getEloquentQuery() below can layer company isolation on top of
+    // the trait's permission scoping instead of replacing it.
+    use HasResourcePermissionQuery {
+        getEloquentQuery as permissionScopedQuery;
+    }
 
     protected static ?string $model = JournalEntry::class;
 
@@ -96,6 +100,14 @@ class JournalEntryResource extends Resource
     protected static ?string $recordTitleAttribute = 'name';
 
     protected static string|\BackedEnum|null $navigationIcon = 'heroicon-o-receipt-percent';
+
+    public static function getEloquentQuery(): Builder
+    {
+        // Company isolation: without this, one company's journal entries show up
+        // in every other company's list.
+        return static::permissionScopedQuery()
+            ->where('company_id', Auth::user()?->default_company_id);
+    }
 
     public static function getModelLabel(): string
     {

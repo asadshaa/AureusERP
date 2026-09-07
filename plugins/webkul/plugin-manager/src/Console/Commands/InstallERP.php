@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
 use Webkul\Support\Models\Company;
@@ -228,6 +229,36 @@ class InstallERP extends Command
         $this->info('👤 Creating an Admin user...');
 
         $defaultCompany = Company::first();
+
+        if (! $defaultCompany) {
+            $currency = Currency::first();
+            $partnerId = null;
+
+            if (Schema::hasTable('partners_partners')) {
+                $partnerId = DB::table('partners_partners')->insertGetId([
+                    'sub_type'         => 'company',
+                    'name'             => 'Default Company',
+                    'email'            => 'admin@example.com',
+                    'website'          => 'http://localhost',
+                    'color'            => '#4F46E5',
+                    'created_at'       => now(),
+                    'updated_at'       => now(),
+                ]);
+            }
+
+            $defaultCompany = Company::create([
+                'sort'                => 1,
+                'name'                => 'Default Company',
+                'company_id'          => 'COMP001',
+                'email'               => 'admin@example.com',
+                'color'               => '#4F46E5',
+                'is_active'           => true,
+                'founded_date'        => now()->toDateString(),
+                'currency_id'         => $currency?->id,
+                'website'             => 'http://localhost',
+                'partner_id'          => $partnerId,
+            ]);
+        }
 
         $userModel = app(Utils::getAuthProviderFQCN());
 

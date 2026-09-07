@@ -61,4 +61,40 @@ class BankStatementLineFactory extends Factory
             'amount_residual' => 0,
         ]);
     }
+
+    public function accountingModule(array $overrides = []): static
+    {
+        return $this->state(function (array $attributes) use ($overrides) {
+            $currencyId = $overrides['currency_id'] ?? $attributes['currency_id'];
+            $debit = $overrides['debit'] ?? ($overrides['original_debit'] ?? 0);
+            $credit = $overrides['credit'] ?? ($overrides['original_credit'] ?? 0);
+            $signedAmount = $credit > 0 ? (string) $credit : '-'.(string) $debit;
+            $date = $overrides['date'] ?? now()->toDateString();
+
+            return array_merge([
+                'transaction_date'        => $date,
+                'value_date'              => $date,
+                'description'             => fake()->sentence(),
+                'reference'               => fake()->bothify('TXN-####'),
+                'original_currency_id'    => $currencyId,
+                'company_currency_id'     => $currencyId,
+                'debit'                   => $debit,
+                'credit'                  => $credit,
+                'original_debit'          => $debit,
+                'original_credit'         => $credit,
+                'original_signed_amount'  => $signedAmount,
+                'company_debit'           => $debit,
+                'company_credit'          => $credit,
+                'company_signed_amount'   => $signedAmount,
+                'running_balance'         => 10000,
+                'import_status'           => 'validated',
+                'conversion_status'       => 'complete',
+                'exchange_rate'           => 1,
+                'rate_date'               => $date,
+                'rate_source'             => 'identity',
+                'rate_type'               => 'transaction',
+                'transaction_fingerprint' => hash('sha256', fake()->uuid()),
+            ], $overrides);
+        });
+    }
 }

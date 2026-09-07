@@ -3,16 +3,23 @@
 namespace Webkul\Accounting\Models;
 
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Webkul\Accounting\Database\Factories\ImportProfileFactory;
 use Webkul\Accounting\Models\Concerns\AuditsConfiguration;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\Company;
 
 class ImportProfile extends Model
 {
-    use AuditsConfiguration;
+    use AuditsConfiguration, HasFactory;
+
+    protected static function newFactory(): ImportProfileFactory
+    {
+        return ImportProfileFactory::new();
+    }
 
     protected $table = 'accounting_import_profiles';
 

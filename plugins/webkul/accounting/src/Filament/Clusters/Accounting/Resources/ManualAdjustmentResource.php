@@ -114,6 +114,14 @@ class ManualAdjustmentResource extends Resource
         ])->recordActions([
             EditAction::make()->authorize(AccountingPermissions::ManageManualAdjustments)
                 ->visible(fn (ManualAdjustment $record) => $record->approval_status === ManualAdjustmentStatus::Draft),
+            Action::make('submit_approval')->label('Submit for approval')->icon('heroicon-o-paper-airplane')
+                ->authorize(AccountingPermissions::ManageManualAdjustments)
+                ->visible(fn (ManualAdjustment $record) => $record->approval_status === ManualAdjustmentStatus::Draft
+                    && app(ManualAdjustmentService::class)->requiresConfiguredApproval($record))
+                ->action(function (ManualAdjustment $record): void {
+                    $request = app(ManualAdjustmentService::class)->submit($record, Auth::user());
+                    Notification::make()->success()->title("Approval request APR-{$request->id} is in the shared approval queue.")->send();
+                }),
             Action::make('approve')->icon('heroicon-o-check')->color('success')
                 ->authorize(AccountingPermissions::ApproveJournal)
                 ->visible(fn (ManualAdjustment $record) => $record->approval_status === ManualAdjustmentStatus::Draft)

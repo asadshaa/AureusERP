@@ -19,6 +19,7 @@ use Webkul\Account\Enums\MoveState;
 use Webkul\Account\Enums\MoveType;
 use Webkul\Account\Enums\TypeTaxUse;
 use Webkul\Accounting\Models\ExchangeRate;
+use Webkul\Accounting\Models\FsTag;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\Company;
 use Webkul\Support\Models\Currency;
@@ -40,6 +41,7 @@ class MoveLine extends Model implements Sortable
         'payment_id',
         'tax_repartition_line_id',
         'account_id',
+        'fs_tag_id',
         'currency_id',
         'original_currency_id',
         'reporting_currency_id',
@@ -165,6 +167,11 @@ class MoveLine extends Model implements Sortable
     public function exchangeRate()
     {
         return $this->belongsTo(ExchangeRate::class, 'exchange_rate_id');
+    }
+
+    public function fsTag(): BelongsTo
+    {
+        return $this->belongsTo(FsTag::class, 'fs_tag_id');
     }
 
     public function partner()
@@ -321,17 +328,16 @@ class MoveLine extends Model implements Sortable
             $moveLine->date = $moveLine->move->date;
 
             $moveLine->computeUOMId();
-
             $moveLine->computeCurrencyId();
-
             $moveLine->computePaymentId();
-
-            $moveLine->computeAccountId();
-
+            // computeDisplayType() must run before computeAccountId(): the account
+            // lookup branches on display_type, so a freshly-added line (display_type
+            // still null) needs its display_type resolved first or computeAccountId()
+            // falls through to the journal's default account (e.g. Accounts
+            // Receivable on a sales journal) instead of the product's income account.
             $moveLine->computeDisplayType();
-
+            $moveLine->computeAccountId();
             $moveLine->computeName();
-
             $moveLine->computeTaxTagInvert();
         });
     }
@@ -423,7 +429,7 @@ class MoveLine extends Model implements Sortable
 
     public function computeAccountId()
     {
-        if ($this->payment_id || $this->tax_line_id || $this->display_type == DisplayType::ROUNDING) {
+        if ($this->account_id || $this->payment_id || $this->tax_line_id || $this->display_type == DisplayType::ROUNDING) {
             return;
         }
 
@@ -503,10 +509,14 @@ class MoveLine extends Model implements Sortable
             return;
         }
 
-        if ($this->move->isInvoice()) {
+        // isInvoice(true) to include receipt-type moves, matching
+        // computeCurrencyId() and AccountManager's own guards. Without the flag
+        // every line on a receipt was forced to PRODUCT, skipping tax and
+        // payment-term inference.
+        if ($this->move->isInvoice(true)) {
             if ($this->tax_line_id) {
                 $this->display_type = DisplayType::TAX;
-            } elseif (in_array($this->account->account_type, [AccountType::ASSET_RECEIVABLE, AccountType::LIABILITY_PAYABLE])) {
+            } elseif ($this->account && in_array($this->account->account_type, [AccountType::ASSET_RECEIVABLE, AccountType::LIABILITY_PAYABLE])) {
                 $this->display_type = DisplayType::PAYMENT_TERM;
             } else {
                 $this->display_type = DisplayType::PRODUCT;

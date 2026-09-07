@@ -12,6 +12,7 @@ use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
@@ -113,6 +114,24 @@ class BankTransactionMappingResource extends Resource
                     ->getSearchResultsUsing($bankAccountSearch)->getOptionLabelUsing($bankAccountLabel)->required(),
                 Select::make('fs_tag_id')->label('FS Tag')->searchable()->live()
                     ->helperText('Selecting a mapped FS Tag supplies the offset GL, cash-flow category and tax treatment.')
+                    ->afterStateUpdated(function (Set $set, $state) use ($companyId): void {
+                        if (! $state) {
+                            return;
+                        }
+
+                        $tag = FsTag::query()->where('company_id', $companyId)->find($state);
+                        if ($tag) {
+                            if ($tag->account_id) {
+                                $set('offset_account_id', $tag->account_id);
+                            }
+                            if ($tag->cash_flow_category) {
+                                $set('cash_flow_category', $tag->cash_flow_category);
+                            }
+                            if ($tag->tax_treatment) {
+                                $set('tax_treatment', $tag->tax_treatment);
+                            }
+                        }
+                    })
                     ->options(fn (): array => $fsTagQuery()->orderBy('code')->limit(50)->get()->mapWithKeys(fn (FsTag $tag): array => [$tag->id => $fsTagLabel($tag)])->all())
                     ->getSearchResultsUsing(fn (string $search): array => $fsTagQuery()
                         ->where(fn ($query) => $query->where('code', 'like', "%{$search}%")->orWhere('name', 'like', "%{$search}%"))
@@ -290,6 +309,18 @@ class BankTransactionMappingResource extends Resource
                 EditAction::make()->visible(fn (BankTransactionMapping $record) => $record->move_id === null
                     && ! in_array($record->posting_status, [BankPostingStatus::Posted, BankPostingStatus::MatchedDoNotPost], true))
                     ->authorize(AccountingPermissions::ReviewBankTransactions),
+                Action::make('submit_approval')
+                    ->label('Submit for approval')
+                    ->authorize(AccountingPermissions::ReviewBankTransactions)
+                    ->icon('heroicon-o-paper-airplane')
+                    ->visible(fn (BankTransactionMapping $record) => $record->transfer_match_id === null
+                        && $record->review_status !== BankReviewStatus::Posted
+                        && $record->review_status !== BankReviewStatus::Approved
+                        && app(BankMappingService::class)->requiresConfiguredApproval($record))
+                    ->action(function (BankTransactionMapping $record): void {
+                        $request = app(BankMappingService::class)->submit($record, Auth::user());
+                        Notification::make()->success()->title("Approval request APR-{$request->id} is in the shared approval queue.")->send();
+                    }),
                 Action::make('approve')
                     ->authorize(AccountingPermissions::ReviewBankTransactions)
                     ->icon('heroicon-o-check')

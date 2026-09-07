@@ -1503,6 +1503,9 @@ class BillResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
+            // Company isolation: without this, one company's bills show up in
+            // every other company's list.
+            ->where('company_id', Auth::user()?->default_company_id)
             ->when(Str::contains(static::class, 'BillResource'), function (Builder $query) {
                 $query->where('move_type', MoveType::IN_INVOICE);
             })

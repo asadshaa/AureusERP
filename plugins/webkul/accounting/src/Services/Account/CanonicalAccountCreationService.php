@@ -4,6 +4,7 @@ namespace Webkul\Accounting\Services\Account;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
 use Webkul\Account\Enums\AccountType;
@@ -57,35 +58,38 @@ class CanonicalAccountCreationService
         if ($currencyId && ! $this->companyCurrencies->isTransactionCurrencyEnabled($company, $currencyId)) {
             throw new RuntimeException('The parent account currency is not enabled for this company.');
         }
-        if ($code !== '' && $this->companyAccountCodeExists($company, $code)) {
-            throw new RuntimeException("GL code {$code} already exists for this company.");
-        }
 
-        return DB::transaction(function () use ($company, $data, $code, $name, $type, $currencyId): Account {
-            $account = Account::query()->create([
-                'code'         => $code !== '' ? $code : null,
-                'name'         => $name,
-                'account_type' => $type,
-                'currency_id'  => $currencyId,
-                'note'         => $data['description'] ?? null,
-                'deprecated'   => false,
-                'reconcile'    => false,
-                'is_group'     => true,
-                'creator_id'   => Auth::id(),
-            ]);
-            $account->companies()->attach($company->id);
+        return Cache::lock("accounting-account-code:{$company->id}", 10)->block(5, function () use ($company, $data, $code, $name, $type, $currencyId): Account {
+            if ($code !== '' && $this->companyAccountCodeExists($company, $code)) {
+                throw new RuntimeException("GL code {$code} already exists for this company.");
+            }
 
-            AccountDetail::query()->create([
-                'account_id'       => $account->id,
-                'company_id'       => $company->id,
-                'currency_id'      => $currencyId,
-                'nature'           => $data['nature'] ?? 'Assets',
-                'classification_1' => $data['classification_1'] ?? null,
-                'description'      => $data['description'] ?? null,
-                'created_by'       => Auth::id(),
-            ]);
+            return DB::transaction(function () use ($company, $data, $code, $name, $type, $currencyId): Account {
+                $account = Account::query()->create([
+                    'code'         => $code !== '' ? $code : null,
+                    'name'         => $name,
+                    'account_type' => $type,
+                    'currency_id'  => $currencyId,
+                    'note'         => $data['description'] ?? null,
+                    'deprecated'   => false,
+                    'reconcile'    => false,
+                    'is_group'     => true,
+                    'creator_id'   => Auth::id(),
+                ]);
+                $account->companies()->attach($company->id);
 
-            return $account->fresh(['companies', 'currency', 'accountingDetail']);
+                AccountDetail::query()->create([
+                    'account_id'       => $account->id,
+                    'company_id'       => $company->id,
+                    'currency_id'      => $currencyId,
+                    'nature'           => $data['nature'] ?? 'Assets',
+                    'classification_1' => $data['classification_1'] ?? null,
+                    'description'      => $data['description'] ?? null,
+                    'created_by'       => Auth::id(),
+                ]);
+
+                return $account->fresh(['companies', 'currency', 'accountingDetail']);
+            });
         });
     }
 
@@ -183,46 +187,49 @@ class CanonicalAccountCreationService
         if ($parentId && ! $this->offsetParentAccountQuery($company, $currencyId)->whereKey($parentId)->exists()) {
             throw new RuntimeException('The parent account must be an active company-owned group with a compatible currency.');
         }
-        if ($this->companyAccountCodeExists($company, $code)) {
-            throw new RuntimeException("GL code {$code} already exists for this company.");
-        }
 
-        return DB::transaction(function () use ($company, $data, $code, $name, $type, $currencyId, $parentId): Account {
-            $account = Account::query()->create([
-                'code'         => $code,
-                'name'         => $name,
-                'account_type' => $type,
-                'currency_id'  => $currencyId,
-                'parent_id'    => $parentId,
-                'note'         => $data['description'] ?? null,
-                'deprecated'   => ! (bool) ($data['active'] ?? true),
-                'reconcile'    => $type === AccountType::ASSET_CASH,
-                'is_group'     => false,
-                'creator_id'   => Auth::id(),
-            ]);
-            $account->companies()->attach($company->id);
+        return Cache::lock("accounting-account-code:{$company->id}", 10)->block(5, function () use ($company, $data, $code, $name, $type, $currencyId, $parentId): Account {
+            if ($this->companyAccountCodeExists($company, $code)) {
+                throw new RuntimeException("GL code {$code} already exists for this company.");
+            }
 
-            AccountDetail::query()->create([
-                'account_id'          => $account->id,
-                'company_id'          => $company->id,
-                'currency_id'         => $currencyId,
-                'nature'              => $data['nature'] ?? null,
-                'classification_1'    => $data['classification_1'] ?? null,
-                'classification_2'    => $data['classification_2'] ?? null,
-                'classification_3'    => $data['classification_3'] ?? null,
-                'classification_4'    => $data['classification_4'] ?? null,
-                'classification_5'    => $data['classification_5'] ?? null,
-                'classification_6'    => $data['classification_6'] ?? null,
-                'classification_7'    => $data['classification_7'] ?? null,
-                'bank_name'           => $data['bank_name'] ?? null,
-                'bank_account_number' => $data['bank_account_number'] ?? null,
-                'iban'                => $data['iban'] ?? null,
-                'branch_reference'    => $data['branch_reference'] ?? null,
-                'description'         => $data['description'] ?? null,
-                'created_by'          => Auth::id(),
-            ]);
+            return DB::transaction(function () use ($company, $data, $code, $name, $type, $currencyId, $parentId): Account {
+                $account = Account::query()->create([
+                    'code'         => $code,
+                    'name'         => $name,
+                    'account_type' => $type,
+                    'currency_id'  => $currencyId,
+                    'parent_id'    => $parentId,
+                    'note'         => $data['description'] ?? null,
+                    'deprecated'   => ! (bool) ($data['active'] ?? true),
+                    'reconcile'    => $type->isReconcilable(),
+                    'is_group'     => false,
+                    'creator_id'   => Auth::id(),
+                ]);
+                $account->companies()->attach($company->id);
 
-            return $account->fresh(['companies', 'currency', 'accountingDetail']);
+                AccountDetail::query()->create([
+                    'account_id'          => $account->id,
+                    'company_id'          => $company->id,
+                    'currency_id'         => $currencyId,
+                    'nature'              => $data['nature'] ?? null,
+                    'classification_1'    => $data['classification_1'] ?? null,
+                    'classification_2'    => $data['classification_2'] ?? null,
+                    'classification_3'    => $data['classification_3'] ?? null,
+                    'classification_4'    => $data['classification_4'] ?? null,
+                    'classification_5'    => $data['classification_5'] ?? null,
+                    'classification_6'    => $data['classification_6'] ?? null,
+                    'classification_7'    => $data['classification_7'] ?? null,
+                    'bank_name'           => $data['bank_name'] ?? null,
+                    'bank_account_number' => $data['bank_account_number'] ?? null,
+                    'iban'                => $data['iban'] ?? null,
+                    'branch_reference'    => $data['branch_reference'] ?? null,
+                    'description'         => $data['description'] ?? null,
+                    'created_by'          => Auth::id(),
+                ]);
+
+                return $account->fresh(['companies', 'currency', 'accountingDetail']);
+            });
         });
     }
 

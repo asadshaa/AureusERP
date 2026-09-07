@@ -86,10 +86,15 @@ final class BankMatchingPriorityService
                     $move->consolidated_number,
                 ])->filter()->first(fn (string $identifier): bool => $identifier === $reference || str_contains($description, $identifier));
                 $mapping->update([
-                    'offset_account_id' => $accountId, 'matched_move_id' => $move->id,
-                    'match_type'        => 'obligation', 'matched_reference' => $matchedReference ?: $reference,
-                    'transaction_type'  => 'Open document settlement', 'review_status' => BankReviewStatus::Suggested,
-                    'confidence'        => 1, 'suggestion_explanation' => 'A unique open document matched by invoice, booking or consolidated reference and compatible amount.',
+                    'offset_account_id'      => $accountId,
+                    'fs_tag_id'              => null,
+                    'matched_move_id'        => $move->id,
+                    'match_type'             => 'obligation',
+                    'matched_reference'      => $matchedReference ?: $reference,
+                    'transaction_type'       => 'Open document settlement',
+                    'review_status'          => BankReviewStatus::Suggested,
+                    'confidence'             => 1,
+                    'suggestion_explanation' => 'A unique open document matched by invoice, booking or consolidated reference and compatible amount.',
                 ]);
                 $obligations++;
 
@@ -115,7 +120,13 @@ final class BankMatchingPriorityService
             $payment = $paymentMatches->first();
             if ($payment && $this->amountMatches($mapping, (string) $payment->amount)) {
                 $mapping->update([
-                    'offset_account_id' => $payment->destination_account_id ?: $payment->outstanding_account_id,
+                    // Prefer the outstanding (clearing) account: registering a
+                    // payment already posted Dr Outstanding / Cr Receivable, so
+                    // the receivable is settled. The bank line must clear the
+                    // outstanding account, not credit the receivable a second
+                    // time. Payments with no outstanding account never produced
+                    // a journal entry, so those fall back to the destination.
+                    'offset_account_id' => $payment->outstanding_account_id ?: $payment->destination_account_id,
                     'match_type'        => 'payment', 'matched_reference' => $reference,
                     'transaction_type'  => 'Registered payment', 'review_status' => BankReviewStatus::Suggested,
                     'confidence'        => 1, 'suggestion_explanation' => "Exact payment reference {$reference} and amount matched.",

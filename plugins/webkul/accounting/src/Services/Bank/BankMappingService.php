@@ -6,14 +6,38 @@ use Brick\Math\BigDecimal;
 use Brick\Math\RoundingMode;
 use Illuminate\Support\Facades\DB;
 use Webkul\Account\Models\BankStatement;
+use Webkul\Accounting\Enums\BankPostingStatus;
 use Webkul\Accounting\Enums\BankReviewStatus;
 use Webkul\Accounting\Models\BankMappingRule;
 use Webkul\Accounting\Models\BankTransactionMapping;
 use Webkul\Security\Models\User;
+use Webkul\Support\Models\ApprovalRequest;
+use Webkul\Support\Services\ApprovalEngine;
 
 class BankMappingService
 {
     public function __construct(protected BankDescriptionNormalizer $normalizer) {}
+
+    public function requiresConfiguredApproval(BankTransactionMapping $mapping): bool
+    {
+        return app(ApprovalEngine::class)->matchingWorkflow(
+            (int) $mapping->company_id,
+            'bank_transaction_mapping',
+            null,
+            ['amount' => (float) ($mapping->statementLine?->company_signed_amount ?? 0)],
+        ) !== null;
+    }
+
+    public function submit(BankTransactionMapping $mapping, User $requester): ApprovalRequest
+    {
+        return app(ApprovalEngine::class)->submit(
+            $mapping,
+            $requester,
+            'bank_transaction_mapping',
+            null,
+            ['amount' => (float) ($mapping->statementLine?->company_signed_amount ?? 0)],
+        );
+    }
 
     public function suggestForStatement(BankStatement $statement, float $reviewThreshold = 0.85): int
     {
@@ -61,6 +85,24 @@ class BankMappingService
 
     public function approve(BankTransactionMapping $mapping, User $reviewer, bool $learn = true): BankTransactionMapping
     {
+        if ($mapping->posting_status === BankPostingStatus::Posted || $mapping->review_status === BankReviewStatus::Posted) {
+            throw new \RuntimeException('Cannot approve an already posted transaction mapping.');
+        }
+
+        if ($mapping->review_status === BankReviewStatus::Approved) {
+            return $mapping;
+        }
+
+        if ($this->requiresConfiguredApproval($mapping) && ! ApprovalRequest::query()
+            ->where('company_id', $mapping->company_id)
+            ->where('request_type', 'bank_transaction_mapping')
+            ->where('subject_type', $mapping->getMorphClass())
+            ->where('subject_id', $mapping->id)
+            ->where('status', 'approved')
+            ->exists()) {
+            throw new \RuntimeException('This transaction mapping requires a completed approval workflow before approval.');
+        }
+
         $mapping->loadMissing(['statementLine.statement', 'bankGlAccount.companies', 'offsetAccount.companies', 'fsTag.account.companies']);
         $companyId = $mapping->company_id;
 

@@ -1,0 +1,9 @@
+HBL — Raw Bank Statement,,,,,,,
+Account title,Truck It In (Private) Limited,,,,Opening balance,"3,200,000",
+Account number,PK36HABB0000123456789001,,,,Total debits,"3,500",
+Statement period,01-Sep-2026 to 30-Sep-2026,,,,Total credits,"650,000",
+Currency,PKR,,,,Closing balance,"3,846,500",
+,,,,,,,
+Transaction Date,Value Date,Description,Reference,Debit (PKR),Credit (PKR),Balance (PKR),FS Tag
+10-Sep-2026,10-Sep-2026,IBFT CR - Fatima Fertilizer collection INV/2026/32,FFC260910001,,"650,000","3,850,000",
+12-Sep-2026,12-Sep-2026,Bank service charges - September,HBL260912CHG,"3,500",,"3,846,500",

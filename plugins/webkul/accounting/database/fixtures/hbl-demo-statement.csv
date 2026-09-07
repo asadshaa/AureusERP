@@ -1,0 +1,19 @@
+HBL — Raw Bank Statement,,,,,,,
+Account title,Truck It In (Demo),,,,Opening balance,"1,000,000",
+Account number,PK55DEMO0000000000000001,,,,Total debits,"807,168",
+Statement period,01-Jul-2026 to 31-Jul-2026,,,,Total credits,"868,450",
+Currency,PKR,,,,Closing balance,"1,061,282",
+,,,,,,,
+Transaction Date,Value Date,Description,Reference,Debit (PKR),Credit (PKR),Balance (PKR),FS Tag
+06-Jul-2026,06-Jul-2026,IBFT CR - Customer collection INV-DEMO-1002,DEMO260706001,,"150,000","1,150,000",
+07-Jul-2026,07-Jul-2026,IBFT CR - Customer collection INV-DEMO-1001,DEMO260707002,,"200,000","1,350,000",
+09-Jul-2026,09-Jul-2026,Online transfer - Vendor payment BILL-DEMO-2001,DEMO260709003,"80,000",,"1,270,000",
+12-Jul-2026,12-Jul-2026,Bank service charges - July,DEMO260712004,"2,500",,"1,267,500",FS-BANK-FEE
+12-Jul-2026,12-Jul-2026,FED on bank service charges,DEMO260712005,"400",,"1,267,100",FS-BANK-FEE
+15-Jul-2026,15-Jul-2026,Transfer to Demo Payroll Account,DEMO260715006,"500,000",,"767,100",FS-TRANSFER
+15-Jul-2026,15-Jul-2026,Transfer from Demo Operating Account,DEMO260715007,,"500,000","1,267,100",FS-TRANSFER
+18-Jul-2026,18-Jul-2026,Card 4411 - Cloud services subscription,DEMO260718008,"36,500",,"1,230,600",FS-TECH
+22-Jul-2026,22-Jul-2026,Online transfer - Insurance premium,DEMO260722009,"180,000",,"1,050,600",FS-INSURANCE
+28-Jul-2026,28-Jul-2026,Profit credited on current account,DEMO260728010,,"18,450","1,069,050",FS-PROFIT
+29-Jul-2026,29-Jul-2026,Advance tax on bank profit,DEMO260729011,"2,768",,"1,066,282",FS-TAX-WHT
+30-Jul-2026,30-Jul-2026,MISC DR 88213,DEMO260730012,"5,000",,"1,061,282",
