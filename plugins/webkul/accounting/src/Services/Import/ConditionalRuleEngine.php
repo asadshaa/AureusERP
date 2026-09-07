@@ -13,6 +13,14 @@ final class ConditionalRuleEngine
     private const ACTIONS = ['set', 'copy', 'default', 'map'];
 
     /**
+     * Action types that are recognized but intentionally not applied as a value
+     * transformation here — e.g. `mark_non_critical`, which ImportPreviewService
+     * interprets separately (via matches()) to decide whether a validation failure on the
+     * targeted field may be downgraded under the Warn-and-Continue failure policy.
+     */
+    private const NON_TRANSFORMATION_ACTIONS = ['mark_non_critical'];
+
+    /**
      * @param  array<string, mixed>  $values
      * @param  Collection<int, BusinessRule>  $rules
      * @return array{values: array<string, mixed>, applied_rule_ids: array<int, int>}
@@ -36,6 +44,20 @@ final class ConditionalRuleEngine
         }
 
         return ['values' => $values, 'applied_rule_ids' => $applied];
+    }
+
+    /**
+     * Public entry point for callers that only need to know whether a rule's conditions
+     * match a row (e.g. deciding whether a rule's non-transformation actions, such as
+     * flagging a field non-critical for the Warn-and-Continue failure policy, apply)
+     * without going through apply()'s transformation-action whitelist.
+     *
+     * @param  array<string, mixed>  $values
+     * @param  array<int, array<string, mixed>>  $conditions
+     */
+    public function matches(array $values, array $conditions): bool
+    {
+        return $this->matchesAll($values, $conditions);
     }
 
     /** @param array<string, mixed> $values @param array<int, array<string, mixed>> $conditions */
@@ -74,6 +96,9 @@ final class ConditionalRuleEngine
     private function applyAction(array $values, array $action): array
     {
         $type = (string) ($action['type'] ?? '');
+        if (in_array($type, self::NON_TRANSFORMATION_ACTIONS, true)) {
+            return $values;
+        }
         if (! in_array($type, self::ACTIONS, true)) {
             throw new InvalidArgumentException("Unsupported rule action [{$type}].");
         }

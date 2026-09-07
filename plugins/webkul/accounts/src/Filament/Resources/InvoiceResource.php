@@ -1604,6 +1604,9 @@ class InvoiceResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
+            // Company isolation: without this, one company's invoices show up in
+            // every other company's list.
+            ->where('company_id', Auth::user()?->default_company_id)
             ->when(Str::contains(static::class, 'InvoiceResource'), function (Builder $query) {
                 $query->where('move_type', MoveType::OUT_INVOICE);
             })

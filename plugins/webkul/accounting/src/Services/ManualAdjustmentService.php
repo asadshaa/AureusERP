@@ -11,11 +11,44 @@ use Webkul\Account\Models\Move;
 use Webkul\Accounting\Enums\ManualAdjustmentStatus;
 use Webkul\Accounting\Models\ManualAdjustment;
 use Webkul\Security\Models\User;
+use Webkul\Support\Models\ApprovalRequest;
+use Webkul\Support\Services\ApprovalEngine;
 
 class ManualAdjustmentService
 {
+    public function requiresConfiguredApproval(ManualAdjustment $adjustment): bool
+    {
+        return app(ApprovalEngine::class)->matchingWorkflow(
+            (int) $adjustment->company_id,
+            'manual_adjustment',
+            null,
+            ['amount' => (float) $adjustment->amount],
+        ) !== null;
+    }
+
+    public function submit(ManualAdjustment $adjustment, User $requester): ApprovalRequest
+    {
+        return app(ApprovalEngine::class)->submit(
+            $adjustment,
+            $requester,
+            'manual_adjustment',
+            null,
+            ['amount' => (float) $adjustment->amount],
+        );
+    }
+
     public function approve(ManualAdjustment $adjustment, User $reviewer): ManualAdjustment
     {
+        if ($this->requiresConfiguredApproval($adjustment) && ! ApprovalRequest::query()
+            ->where('company_id', $adjustment->company_id)
+            ->where('request_type', 'manual_adjustment')
+            ->where('subject_type', $adjustment->getMorphClass())
+            ->where('subject_id', $adjustment->id)
+            ->where('status', 'approved')
+            ->exists()) {
+            throw new RuntimeException('This manual adjustment requires a completed approval workflow before approval.');
+        }
+
         $adjustment->update([
             'approval_status' => ManualAdjustmentStatus::Approved,
             'reviewer_id'     => $reviewer->id,

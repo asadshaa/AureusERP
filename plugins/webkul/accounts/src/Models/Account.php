@@ -80,19 +80,21 @@ class Account extends Model
         return $this->children()->with('descendants');
     }
 
-    public function getDescendantIds(): array
+    public function getDescendantIds(array $visited = []): array
     {
         $ids = [];
+        $visited[] = $this->id;
 
         foreach ($this->children as $child) {
-            $ids = [
-                ...$ids,
-                $child->id,
-                ...$child->getDescendantIds(),
-            ];
+            if (in_array($child->id, $visited, true)) {
+                continue;
+            }
+
+            $ids[] = $child->id;
+            $ids = array_merge($ids, $child->getDescendantIds($visited));
         }
 
-        return $ids;
+        return array_values(array_unique($ids));
     }
 
     public function taxes(): BelongsToMany
@@ -134,12 +136,15 @@ class Account extends Model
     ) {
         $minDate = now()->subYears(2)->toDateString();
 
+        // There is no `internal_group` column on accounts_accounts; the group is
+        // expressed through account_type, so narrow on the types that make up
+        // the income/expense groups instead.
         $group = null;
 
         if (in_array($moveType, (new Move)->getInboundTypes(true))) {
-            $group = 'income';
+            $group = array_keys(AccountType::income());
         } elseif (in_array($moveType, (new Move)->getOutboundTypes(true))) {
-            $group = 'expense';
+            $group = array_keys(AccountType::expenses());
         }
 
         $query = DB::table('accounts_account_move_lines')
@@ -151,7 +156,7 @@ class Account extends Model
             ->whereDate('accounts_account_move_lines.date', '>=', $minDate);
 
         if ($group) {
-            $query->where('accounts_accounts.internal_group', $group);
+            $query->whereIn('accounts_accounts.account_type', $group);
         }
 
         if (! $filterNeverUsedAccounts) {
@@ -170,7 +175,7 @@ class Account extends Model
                 ->where('accounts_accounts.deprecated', false);
 
             if ($group) {
-                $accountsBase->where('accounts_accounts.internal_group', $group);
+                $accountsBase->whereIn('accounts_accounts.account_type', $group);
             }
 
             $query = $query->unionAll($accountsBase);

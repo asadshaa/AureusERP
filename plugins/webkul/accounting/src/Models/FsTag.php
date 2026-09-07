@@ -3,17 +3,25 @@
 namespace Webkul\Accounting\Models;
 
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Str;
 use Webkul\Account\Models\Account;
+use Webkul\Account\Models\MoveLine;
+use Webkul\Accounting\Database\Factories\FsTagFactory;
 use Webkul\Accounting\Models\Concerns\AuditsConfiguration;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\Company;
 
 class FsTag extends Model
 {
-    use AuditsConfiguration;
+    use AuditsConfiguration, HasFactory;
+
+    protected static function newFactory(): FsTagFactory
+    {
+        return FsTagFactory::new();
+    }
 
     protected $table = 'accounting_fs_tags';
 
@@ -49,6 +57,14 @@ class FsTag extends Model
         static::saving(function (self $tag): void {
             $tag->normalized_name = Str::of($tag->name)->squish()->lower()->value();
             $tag->code = Str::upper(trim($tag->code));
+        });
+
+        static::deleting(function (self $tag): void {
+            $inUseLines = MoveLine::query()->where('fs_tag_id', $tag->id)->exists();
+            $inUseMappings = BankTransactionMapping::query()->where('fs_tag_id', $tag->id)->exists();
+            if ($inUseLines || $inUseMappings) {
+                throw new \RuntimeException('Cannot delete an FS Tag that is referenced by transaction mappings or journal move lines. Deactivate it instead.');
+            }
         });
     }
 }

@@ -625,6 +625,9 @@ class PaymentResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
+            // Company isolation: without this, one company's payments show up in
+            // every other company's list.
+            ->where('company_id', Auth::user()?->default_company_id)
             ->orderByDesc('id');
     }
 }

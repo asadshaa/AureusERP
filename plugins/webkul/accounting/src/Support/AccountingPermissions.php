@@ -134,6 +134,16 @@ final class AccountingPermissions
             'view_accounting_exchange_rate',
             'create_accounting_exchange_rate',
             'update_accounting_exchange_rate',
+            'view_any_accounting_invoice',
+            'view_accounting_invoice',
+            'create_accounting_invoice',
+            'update_accounting_invoice',
+            'delete_accounting_invoice',
+            'view_any_accounting_bill',
+            'view_accounting_bill',
+            'create_accounting_bill',
+            'update_accounting_bill',
+            'delete_accounting_bill',
         ];
     }
 

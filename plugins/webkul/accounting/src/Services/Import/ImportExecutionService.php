@@ -23,6 +23,7 @@ use Webkul\Account\Models\PaymentTerm;
 use Webkul\Account\Models\Tax;
 use Webkul\Accounting\Data\Bank\NormalizedBankStatement;
 use Webkul\Accounting\Data\Bank\NormalizedBankTransaction;
+use Webkul\Accounting\Enums\ImportFailurePolicy;
 use Webkul\Accounting\Models\FsTag;
 use Webkul\Accounting\Models\ImportRun;
 use Webkul\Accounting\Models\ImportSourceRow;
@@ -47,8 +48,8 @@ final class ImportExecutionService
             if ($lockedRun->status !== 'previewed') {
                 throw new RuntimeException('Only a previewed import run can be confirmed.');
             }
-            $failurePolicy = (string) ($lockedRun->profile->failure_policy ?: 'reject_file');
-            if ($lockedRun->failed_rows > 0 && $failurePolicy === 'reject_file') {
+            $failurePolicy = ImportFailurePolicy::fromValue($lockedRun->profile->failure_policy);
+            if ($lockedRun->failed_rows > 0 && $failurePolicy === ImportFailurePolicy::RejectFile) {
                 throw new RuntimeException('Correct all preview errors before confirming the import. This profile rejects the entire file when any row fails validation.');
             }
             if ($lockedRun->duplicate_rows > 0 && ! $discardDuplicates) {
@@ -86,15 +87,9 @@ final class ImportExecutionService
                     $values = (array) $sourceRow->transformed_values;
                     $tagCode = trim((string) ($values['fs_tag'] ?? ''));
 
-                    $tag = null;
-
-                    if ($tagCode !== '') {
-                        $tag = FsTag::query()
-                            ->where('company_id', $lockedRun->company_id)
-                            ->whereRaw('UPPER(code) = ?', [mb_strtoupper($tagCode)])
-                            ->where('is_active', true)
-                            ->first();
-                    }
+                    $tag = $tagCode !== ''
+                        ? app(FsTagService::class)->resolve($lockedRun->company_id, $tagCode)
+                        : null;
 
                     if ($line->mapping) {
                         $offsetCode = trim((string) ($values['offset_gl_code'] ?? ''));
@@ -150,9 +145,9 @@ final class ImportExecutionService
             }
 
             $status = match (true) {
-                $lockedRun->failed_rows > 0 && $failurePolicy === 'flag_review' => 'completed_with_review',
-                $lockedRun->failed_rows > 0                                     => 'completed_with_rejections',
-                default                                                         => 'completed',
+                $lockedRun->failed_rows > 0 && $failurePolicy === ImportFailurePolicy::NeedsReview => 'completed_with_review',
+                $lockedRun->failed_rows > 0                                                        => 'completed_with_rejections',
+                default                                                                            => 'completed',
             };
 
             $lockedRun->update([
@@ -301,10 +296,13 @@ final class ImportExecutionService
     private function importedLedgerLines(ImportRun $run, $rows, Company $company, Currency $currency, string $date): array
     {
         $rate = app(ExchangeRateService::class)->resolve($company, $currency, $company->currency, $date);
+        $codes = $rows->map(fn (ImportSourceRow $row): string => mb_strtoupper(trim((string) ($row->transformed_values['gl_code'] ?? ''))))->filter()->unique();
         $accounts = Account::query()
             ->postable()
             ->where('deprecated', false)
-            ->whereIn('code', $rows->map(fn (ImportSourceRow $row): string => (string) $row->transformed_values['gl_code'])->unique())
+            ->where(function ($q) use ($codes) {
+                $q->whereIn(DB::raw('UPPER(code)'), $codes);
+            })
             ->whereHas('companies', fn ($query) => $query->where('companies.id', $run->company_id))
             ->get()
             ->keyBy(fn (Account $account): string => mb_strtoupper((string) $account->code));
@@ -317,9 +315,12 @@ final class ImportExecutionService
 
         return $rows->map(function (ImportSourceRow $row) use ($accounts, $fsTags, $rate): array {
             $values = (array) $row->transformed_values;
-            $account = $accounts->get(mb_strtoupper(trim((string) $values['gl_code'])))
-                ?? throw new RuntimeException("GL code [{$values['gl_code']}] is no longer available for this company.");
-            $fsTag = $fsTags->get(mb_strtoupper(trim((string) ($values['fs_tag'] ?? ''))));
+            $glCode = mb_strtoupper(trim((string) ($values['gl_code'] ?? '')));
+            $account = $accounts->get($glCode) ?? throw new RuntimeException("GL Account [{$values['gl_code']}] is no longer active or available for this company.");
+            $tagCode = mb_strtoupper(trim((string) ($values['fs_tag'] ?? '')));
+            $fsTag = $tagCode !== ''
+                ? ($fsTags->get($tagCode) ?? throw new RuntimeException("FS Tag [{$values['fs_tag']}] is no longer active or available for this company."))
+                : null;
             $originalDebit = BigDecimal::of((string) ($values['debit'] ?? '0'))->toScale(4, RoundingMode::HalfUp)->__toString();
             $originalCredit = BigDecimal::of((string) ($values['credit'] ?? '0'))->toScale(4, RoundingMode::HalfUp)->__toString();
 
@@ -826,5 +827,66 @@ final class ImportExecutionService
             'company_signed_amount' => BigDecimal::of($companyAmount)->negated()->__toString(),
             'amount_currency'       => BigDecimal::of($originalAmount)->negated()->__toString(),
         ]);
+    }
+
+    public function exportRejectedRows(ImportRun $run): string
+    {
+        $headers = (array) ($run->summary['headers'] ?? []);
+        $failedRows = $run->sourceRows()
+            ->where('status', 'error')
+            ->orderBy('source_row_number')
+            ->get();
+
+        if ($failedRows->isEmpty()) {
+            if (empty($headers)) {
+                return '';
+            }
+
+            $handle = fopen('php://temp', 'r+');
+            fputcsv($handle, [...$headers, 'rejection_reason']);
+            rewind($handle);
+            $csv = stream_get_contents($handle);
+            fclose($handle);
+
+            return (string) $csv;
+        }
+
+        if (empty($headers)) {
+            $firstRaw = (array) ($failedRows->first()?->raw_values ?? []);
+            $headers = array_keys($firstRaw);
+        }
+
+        $handle = fopen('php://temp', 'r+');
+        fputcsv($handle, [...$headers, 'rejection_reason']);
+
+        foreach ($failedRows as $row) {
+            $rawValues = (array) $row->raw_values;
+            $line = [];
+            foreach ($headers as $header) {
+                $line[] = $rawValues[$header] ?? '';
+            }
+
+            $messages = collect((array) $row->messages)
+                ->map(function ($m): string {
+                    if (is_array($m)) {
+                        $field = ! empty($m['field']) ? "{$m['field']}: " : '';
+
+                        return $field.($m['message'] ?? '');
+                    }
+
+                    return (string) $m;
+                })
+                ->filter()
+                ->implode('; ');
+
+            $line[] = $messages;
+            fputcsv($handle, $line);
+        }
+
+        rewind($handle);
+        $csv = stream_get_contents($handle);
+        fclose($handle);
+
+        return (string) $csv;
     }
 }

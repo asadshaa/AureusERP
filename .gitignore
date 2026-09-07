@@ -49,3 +49,9 @@ Thumbs.db
 
 # Credential files (keystores, private keys, etc.)
 /credentials/
+
+# Local scratch/backup staging area (not part of the application)
+/_stage/
+
+# Claude Code session-local state (launch.json is kept and versioned)
+/.claude/scheduled_tasks.lock

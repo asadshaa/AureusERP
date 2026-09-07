@@ -16,22 +16,65 @@ use Webkul\Account\Models\Journal;
 use Webkul\Account\Models\Partner;
 use Webkul\Account\Models\PaymentTerm;
 use Webkul\Account\Models\Tax;
+use Webkul\Accounting\Enums\ImportFailurePolicy;
 use Webkul\Accounting\Models\BusinessRule;
 use Webkul\Accounting\Models\FsTag;
 use Webkul\Accounting\Models\ImportProfile;
 use Webkul\Accounting\Models\ImportProfileMapping;
 use Webkul\Accounting\Models\ImportRun;
 use Webkul\Accounting\Models\ImportSourceRow;
+use Webkul\Accounting\Services\FsTagService;
 use Webkul\Support\Models\Currency;
 
 final class ImportPreviewService
 {
+    /**
+     * Fields a Warn-and-Continue BusinessRule action is never allowed to downgrade from
+     * error to warning, regardless of configuration — these are hard accounting-integrity
+     * checks (unknown/inactive/wrong-company GL or FS Tag, bad currency, unbalanced
+     * amounts), and "warn and continue" must never bypass them (see the four-policy spec).
+     */
+    private const HARD_INTEGRITY_FIELDS = [
+        'gl_code', 'offset_gl_code', 'bank_gl_code', 'debit_gl_code', 'credit_gl_code',
+        'fs_tag', 'currency', 'debit', 'credit', 'amount_total', 'amount_untaxed', 'amount_tax',
+    ];
+
     public function __construct(
         private readonly TabularFileReader $reader,
         private readonly ImportTransformationEngine $transformations,
         private readonly ConditionalRuleEngine $rules,
         private readonly ImportEntityRegistry $entities,
+        private readonly FsTagService $fsTags,
     ) {}
+
+    /** @return array<int, array{severity: string, field: string, message: string}> */
+    private function validateFsTagReference(int $companyId, string $rawCode): array
+    {
+        $tagCode = trim($rawCode);
+        $tagInCompany = $this->fsTags->resolve($companyId, $tagCode, activeOnly: false);
+
+        if (! $tagInCompany) {
+            $existsInAnotherCompany = $this->fsTags->existsForAnyCompany($tagCode);
+
+            return [[
+                'severity' => 'error',
+                'field'    => 'fs_tag',
+                'message'  => $existsInAnotherCompany
+                    ? 'The FS Tag belongs to another company.'
+                    : 'The FS Tag does not exist in this company.',
+            ]];
+        }
+
+        if (! $tagInCompany->is_active) {
+            return [[
+                'severity' => 'error',
+                'field'    => 'fs_tag',
+                'message'  => 'The FS Tag is inactive in this company.',
+            ]];
+        }
+
+        return [];
+    }
 
     public function preview(ImportProfile $profile, string $path, string $originalFilename, ?int $userId = null): ImportRun
     {
@@ -124,7 +167,7 @@ final class ImportPreviewService
                     'messages'                   => $messages,
                 ]);
 
-                if ($fingerprint !== null && ! isset($seenInRun[$fingerprint])) {
+                if ($fingerprint !== null && self::isEligibleForDuplicateRegistration($status) && ! isset($seenInRun[$fingerprint])) {
                     $seenInRun[$fingerprint] = $created;
                 }
             }
@@ -200,7 +243,52 @@ final class ImportPreviewService
 
         $messages = [...$messages, ...$this->validateReferences($profile, $values)];
 
+        if (ImportFailurePolicy::fromValue($profile->failure_policy) === ImportFailurePolicy::WarnContinue) {
+            $messages = $this->downgradeNonCriticalErrors($messages, $values, $effectiveRules);
+        }
+
         return [$values, $messages];
+    }
+
+    /**
+     * Under the Warn-and-Continue failure policy only, downgrade an 'error' message to
+     * 'warning' (so the row imports instead of being excluded) when an active BusinessRule
+     * explicitly marks that field non-critical for this row via a `mark_non_critical`
+     * action — never for a hard accounting-integrity field (see HARD_INTEGRITY_FIELDS).
+     *
+     * @param  array<int, array{severity: string, field?: string, message: string}>  $messages
+     * @param  array<string, mixed>  $values
+     * @param  Collection<int, BusinessRule>  $effectiveRules
+     * @return array<int, array{severity: string, field?: string, message: string}>
+     */
+    private function downgradeNonCriticalErrors(array $messages, array $values, $effectiveRules): array
+    {
+        $nonCriticalFields = $effectiveRules
+            ->filter(fn (BusinessRule $rule): bool => $this->rules->matches($values, (array) $rule->conditions))
+            ->flatMap(fn (BusinessRule $rule) => collect((array) $rule->actions)
+                ->filter(fn ($action): bool => (string) ($action['type'] ?? '') === 'mark_non_critical')
+                ->pluck('field'))
+            ->filter()
+            ->unique()
+            ->all();
+
+        if ($nonCriticalFields === []) {
+            return $messages;
+        }
+
+        return array_map(function (array $message) use ($nonCriticalFields): array {
+            $field = $message['field'] ?? null;
+            if (
+                $message['severity'] === 'error'
+                && $field !== null
+                && in_array($field, $nonCriticalFields, true)
+                && ! in_array($field, self::HARD_INTEGRITY_FIELDS, true)
+            ) {
+                $message['severity'] = 'warning';
+            }
+
+            return $message;
+        }, $messages);
     }
 
     /** @param array<int, string> $normalizedHeaders @param array<int, mixed> $sourceValues */
@@ -334,12 +422,8 @@ final class ImportPreviewService
                 $messages[] = ['severity' => 'error', 'field' => 'offset_gl_code', 'message' => 'The Offset GL code is not an active postable account in this company.'];
             }
 
-            if (! empty($values['fs_tag']) && ! FsTag::query()
-                ->where('company_id', $profile->company_id)
-                ->whereRaw('UPPER(code) = ?', [mb_strtoupper(trim((string) $values['fs_tag']))])
-                ->where('is_active', true)
-                ->exists()) {
-                $messages[] = ['severity' => 'error', 'field' => 'fs_tag', 'message' => 'The FS Tag is inactive or does not exist in this company.'];
+            if (! empty($values['fs_tag'])) {
+                $messages = [...$messages, ...$this->validateFsTagReference($profile->company_id, (string) $values['fs_tag'])];
             }
         }
 
@@ -393,12 +477,8 @@ final class ImportPreviewService
                 $messages[] = ['severity' => 'error', 'field' => 'debit', 'message' => 'Debit and credit must be valid numbers.'];
             }
 
-            if ($profile->entity_type === 'journal_entry' && ! empty($values['fs_tag']) && ! FsTag::query()
-                ->where('company_id', $profile->company_id)
-                ->where('code', mb_strtoupper(trim((string) $values['fs_tag'])))
-                ->where('is_active', true)
-                ->exists()) {
-                $messages[] = ['severity' => 'error', 'field' => 'fs_tag', 'message' => 'The FS Tag is inactive or does not exist in this company.'];
+            if (in_array($profile->entity_type, ['opening_balance', 'journal_entry'], true) && ! empty($values['fs_tag'])) {
+                $messages = [...$messages, ...$this->validateFsTagReference($profile->company_id, (string) $values['fs_tag'])];
             }
         }
 
@@ -483,5 +563,10 @@ final class ImportPreviewService
         }
 
         return hash('sha256', json_encode($identity, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+    }
+
+    public static function isEligibleForDuplicateRegistration(string $status): bool
+    {
+        return in_array($status, ['pass', 'warning'], true);
     }
 }

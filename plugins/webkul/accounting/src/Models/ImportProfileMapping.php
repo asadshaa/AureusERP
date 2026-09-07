@@ -2,11 +2,20 @@
 
 namespace Webkul\Accounting\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Webkul\Accounting\Database\Factories\ImportProfileMappingFactory;
 
 class ImportProfileMapping extends Model
 {
+    use HasFactory;
+
+    protected static function newFactory(): ImportProfileMappingFactory
+    {
+        return ImportProfileMappingFactory::new();
+    }
+
     protected $table = 'accounting_import_profile_mappings';
 
     protected $guarded = [];

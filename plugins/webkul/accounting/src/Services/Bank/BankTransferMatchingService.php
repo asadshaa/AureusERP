@@ -23,7 +23,13 @@ class BankTransferMatchingService
             ->with(['statement', 'mapping'])
             ->where('company_id', $companyId)
             ->where('debit', '>', 0)
-            ->whereDoesntHave('mapping', fn ($query) => $query->whereNotNull('transfer_match_id')->orWhereNotNull('matched_reference'))
+            ->whereDoesntHave('mapping', fn ($query) => $query
+                ->whereNotNull('transfer_match_id')
+                ->orWhereNotNull('matched_reference')
+                ->orWhereNotNull('move_id')
+                ->orWhereIn('review_status', [BankReviewStatus::Approved->value, BankReviewStatus::Posted->value])
+                ->orWhere('posting_status', BankPostingStatus::Posted->value)
+            )
             ->orderBy('transaction_date')
             ->get();
 
@@ -31,7 +37,13 @@ class BankTransferMatchingService
             ->with(['statement', 'mapping'])
             ->where('company_id', $companyId)
             ->where('credit', '>', 0)
-            ->whereDoesntHave('mapping', fn ($query) => $query->whereNotNull('transfer_match_id')->orWhereNotNull('matched_reference'))
+            ->whereDoesntHave('mapping', fn ($query) => $query
+                ->whereNotNull('transfer_match_id')
+                ->orWhereNotNull('matched_reference')
+                ->orWhereNotNull('move_id')
+                ->orWhereIn('review_status', [BankReviewStatus::Approved->value, BankReviewStatus::Posted->value])
+                ->orWhere('posting_status', BankPostingStatus::Posted->value)
+            )
             ->orderBy('transaction_date')
             ->get();
 

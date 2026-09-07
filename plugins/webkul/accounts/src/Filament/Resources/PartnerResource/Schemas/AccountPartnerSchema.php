@@ -12,6 +12,7 @@ use Filament\Schemas\Components\Fieldset;
 use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Tabs\Tab;
 use Filament\Schemas\Components\Utilities\Get;
+use Illuminate\Support\Facades\Auth;
 use Webkul\Account\Enums\AccountType;
 use Webkul\Account\Enums\AutoPostBills;
 use Webkul\Account\Enums\InvoiceFormat;
@@ -120,18 +121,46 @@ class AccountPartnerSchema
                     ->schema([
                         Select::make('property_account_receivable_id')
                             ->label(__('accounts::filament/resources/partner.form.tabs.invoicing.fieldsets.accounting-entries.fields.account-receivable'))
-                            ->relationship('propertyAccountReceivable', 'name')
+                            ->relationship(
+                                'propertyAccountReceivable',
+                                'name',
+                                // Scope options to the current user's company: an
+                                // unscoped list lets you accidentally assign a
+                                // partner's receivable account to a different
+                                // company's chart of accounts.
+                                modifyQueryUsing: fn ($query) => $query->whereHas(
+                                    'companies',
+                                    fn ($q) => $q->where('companies.id', Auth::user()?->default_company_id)
+                                ),
+                            )
                             ->required()
                             ->searchable()
                             ->preload()
-                            ->default(Account::where('account_type', AccountType::ASSET_RECEIVABLE)->where('deprecated', false)->first()?->id),
+                            ->default(
+                                Account::where('account_type', AccountType::ASSET_RECEIVABLE)
+                                    ->where('deprecated', false)
+                                    ->whereHas('companies', fn ($q) => $q->where('companies.id', Auth::user()?->default_company_id))
+                                    ->first()?->id
+                            ),
                         Select::make('property_account_payable_id')
                             ->label(__('accounts::filament/resources/partner.form.tabs.invoicing.fieldsets.accounting-entries.fields.account-payable'))
-                            ->relationship('propertyAccountPayable', 'name')
+                            ->relationship(
+                                'propertyAccountPayable',
+                                'name',
+                                modifyQueryUsing: fn ($query) => $query->whereHas(
+                                    'companies',
+                                    fn ($q) => $q->where('companies.id', Auth::user()?->default_company_id)
+                                ),
+                            )
                             ->required()
                             ->searchable()
                             ->preload()
-                            ->default(Account::where('account_type', AccountType::LIABILITY_PAYABLE)->where('deprecated', false)->first()?->id),
+                            ->default(
+                                Account::where('account_type', AccountType::LIABILITY_PAYABLE)
+                                    ->where('deprecated', false)
+                                    ->whereHas('companies', fn ($q) => $q->where('companies.id', Auth::user()?->default_company_id))
+                                    ->first()?->id
+                            ),
                     ]),
 
                 Fieldset::make(__('accounts::filament/resources/partner.form.tabs.invoicing.fieldsets.automation.title'))

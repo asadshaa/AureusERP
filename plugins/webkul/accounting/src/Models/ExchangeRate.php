@@ -2,11 +2,13 @@
 
 namespace Webkul\Accounting\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
+use Webkul\Accounting\Database\Factories\ExchangeRateFactory;
 use Webkul\Accounting\Enums\ExchangeRateApprovalStatus;
 use Webkul\Accounting\Enums\ExchangeRateSource;
 use Webkul\Accounting\Enums\ExchangeRateType;
@@ -16,6 +18,13 @@ use Webkul\Support\Models\Currency;
 
 class ExchangeRate extends Model
 {
+    use HasFactory;
+
+    protected static function newFactory(): ExchangeRateFactory
+    {
+        return ExchangeRateFactory::new();
+    }
+
     protected $table = 'accounting_exchange_rates';
 
     protected $fillable = [

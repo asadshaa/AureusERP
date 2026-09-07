@@ -19,6 +19,7 @@ use Filament\Tables\Grouping\Group;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Auth;
 use Webkul\Accounting\Filament\Clusters\Accounting;
 use Webkul\Accounting\Filament\Clusters\Accounting\Resources\JournalItemResource\Pages\ListJournalItems;
 use Webkul\Accounting\Filament\Exports\JournalItemExporter;
@@ -337,6 +338,9 @@ class JournalItemResource extends Resource
     public static function getEloquentQuery(): Builder
     {
         return parent::getEloquentQuery()
+            // Company isolation: without this, one company's journal items show
+            // up in every other company's list.
+            ->where('company_id', Auth::user()?->default_company_id)
             ->orderByDesc('date');
     }
 }

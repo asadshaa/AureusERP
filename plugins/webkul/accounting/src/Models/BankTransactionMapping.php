@@ -2,12 +2,14 @@
 
 namespace Webkul\Accounting\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Str;
 use Webkul\Account\Models\Account;
 use Webkul\Account\Models\BankStatementLine;
 use Webkul\Account\Models\Move;
+use Webkul\Accounting\Database\Factories\BankTransactionMappingFactory;
 use Webkul\Accounting\Enums\BankPostingStatus;
 use Webkul\Accounting\Enums\BankReviewStatus;
 use Webkul\Security\Models\User;
@@ -16,6 +18,13 @@ use Webkul\Support\Models\Currency;
 
 class BankTransactionMapping extends Model
 {
+    use HasFactory;
+
+    protected static function newFactory(): BankTransactionMappingFactory
+    {
+        return BankTransactionMappingFactory::new();
+    }
+
     protected $table = 'accounting_bank_transaction_mappings';
 
     protected $guarded = [];

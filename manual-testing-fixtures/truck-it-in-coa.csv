@@ -1,0 +1,20 @@
+TRUCK IT IN (PRIVATE) LIMITED,,,,,,
+Chart of Accounts,,,,,,
+Nature,Classification 1,Classification 2,Classification 3,Classification 4,Code,Title
+B/S,Assets,Current Assets,Cash & Bank,,1010,Operating Bank Account - HBL
+B/S,Assets,Current Assets,Cash & Bank,,1011,Payroll Bank Account - Meezan
+B/S,Assets,Current Assets,Trade Debts,,1020,Trade Debts - Customers
+B/S,Assets,Non Current Assets,Property and Equipment,Vehicles,1510,Delivery Vehicles - Fleet
+B/S,Liabilities,Current Liabilities,Trade and Other Payables,,2010,Trade Creditors - Carriers
+B/S,Liabilities,Current Liabilities,Accrued Expenses,,2020,Accrued Fuel Expense
+B/S,Liabilities,Current Liabilities,Tax Payable,,2030,Withholding Tax Payable
+B/S,Equity,Share Capital,Issued Share Capital,,3010,Ordinary Share Capital
+P&L,Revenue,Operating Revenue,Freight Revenue,,4010,Freight Revenue - Domestic
+P&L,Revenue,Other Income,,,4020,Foreign Exchange Gain
+P&L,Expenses,Direct Costs,Carrier Cost,,5010,Carrier and Subcontractor Cost
+P&L,Expenses,Operating Expenses,Fuel,,5020,Fuel Expense
+P&L,Expenses,Operating Expenses,Salaries,,5030,Salaries and Wages
+P&L,Expenses,Operating Expenses,Insurance,,5040,Insurance Expense
+P&L,Expenses,Operating Expenses,Bank Charges,,5050,Bank Charges and Fees
+P&L,Expenses,Operating Expenses,Repairs and Maintenance,,5060,Repairs and Maintenance - Fleet
+P&L,Expenses,Finance Cost,,,5070,Foreign Exchange Loss

@@ -184,6 +184,7 @@ class CoaImportService
                         'parent_id'                   => $parentId,
                         'currency_id'                 => $currencyId,
                         'is_group'                    => false,
+                        'reconcile'                   => $type->isReconcilable(),
                         'source_classification_path'  => $row->classificationPathLabel(),
                         'import_batch_id'             => $batch->id,
                     ]);
@@ -201,6 +202,9 @@ class CoaImportService
                     'currency_id'                 => $currencyId,
                     'is_group'                    => false,
                     'deprecated'                  => false,
+                    // Receivable/payable/cash accounts must be reconcilable or
+                    // their move lines never track an outstanding balance.
+                    'reconcile'                   => $type->isReconcilable(),
                     'source_classification_path'  => $row->classificationPathLabel(),
                     'import_batch_id'             => $batch->id,
                 ]);

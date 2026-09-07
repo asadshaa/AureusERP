@@ -49,6 +49,25 @@ enum AccountType: string implements HasLabel
         };
     }
 
+    /**
+     * Whether accounts of this type must support reconciliation.
+     *
+     * Receivable and payable accounts carry an open balance until the invoice
+     * or bill is settled, and cash/credit-card accounts are matched against
+     * bank statements. MoveLine::computeAmountResidual() skips the residual
+     * calculation entirely for non-reconcilable accounts, so getting this
+     * wrong makes an unpaid invoice report itself as fully paid.
+     */
+    public function isReconcilable(): bool
+    {
+        return in_array($this, [
+            self::ASSET_RECEIVABLE,
+            self::LIABILITY_PAYABLE,
+            self::ASSET_CASH,
+            self::LIABILITY_CREDIT_CARD,
+        ], true);
+    }
+
     public static function assets(): array
     {
         return [

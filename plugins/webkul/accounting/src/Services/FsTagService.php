@@ -27,6 +27,11 @@ final class FsTagService
                     throw new RuntimeException('The FS Tag name is required.');
                 }
 
+                $normalizedCode = mb_strtoupper($code);
+                if (FsTag::query()->where('company_id', $company->id)->whereRaw('UPPER(code) = ?', [$normalizedCode])->exists()) {
+                    throw new RuntimeException("An FS Tag with code '{$code}' already exists in this company.");
+                }
+
                 return FsTag::query()->create([
                     'company_id'        => $company->id,
                     'account_id'        => $account?->id,
@@ -75,6 +80,40 @@ final class FsTagService
             'classification_1' => $data['classification_1'] ?? null,
             'description'      => $data['description'] ?? null,
         ]);
+    }
+
+    /**
+     * Resolve an FS Tag by its code within a company, case-insensitively (codes are
+     * normalized to uppercase on save — see FsTag::booted()). Centralizes the lookup
+     * previously duplicated across ImportPreviewService, ImportExecutionService and
+     * BankStatementImportService.
+     */
+    public function resolve(int $companyId, string $code, bool $activeOnly = true): ?FsTag
+    {
+        $normalized = mb_strtoupper(trim($code));
+        if ($normalized === '') {
+            return null;
+        }
+
+        return FsTag::query()
+            ->where('company_id', $companyId)
+            ->whereRaw('UPPER(code) = ?', [$normalized])
+            ->when($activeOnly, fn ($query) => $query->where('is_active', true))
+            ->first();
+    }
+
+    /**
+     * Whether a code exists for any company, used to distinguish "unknown code" from
+     * "belongs to another company" in validation messages.
+     */
+    public function existsForAnyCompany(string $code): bool
+    {
+        $normalized = mb_strtoupper(trim($code));
+        if ($normalized === '') {
+            return false;
+        }
+
+        return FsTag::query()->whereRaw('UPPER(code) = ?', [$normalized])->exists();
     }
 
     private function nextCode(Company $company): string

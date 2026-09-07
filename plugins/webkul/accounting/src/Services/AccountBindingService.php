@@ -39,7 +39,7 @@ class AccountBindingService
 
         foreach ($line->accountBindings as $binding) {
             $accountId = (int) $binding->account_id;
-            $sign      = (int) $binding->sign === -1 ? -1 : 1;
+            $sign = (int) $binding->sign === -1 ? -1 : 1;
 
             foreach ($this->expandAccountId($accountId) as $resolvedId) {
                 $signedAccounts[$resolvedId] = $sign;
@@ -82,20 +82,23 @@ class AccountBindingService
     /**
      * Descendant account ids, walking the existing Account parent/children tree.
      *
+     * @param  array<int, int>  $visited
      * @return array<int, int>
      */
-    protected function descendantIdsOf(Account $account): array
+    protected function descendantIdsOf(Account $account, array $visited = []): array
     {
         $ids = [];
+        $visited[] = (int) $account->id;
 
         foreach ($account->children as $child) {
-            $ids = [
-                ...$ids,
-                (int) $child->id,
-                ...$this->descendantIdsOf($child),
-            ];
+            if (in_array((int) $child->id, $visited, true)) {
+                continue;
+            }
+
+            $ids[] = (int) $child->id;
+            $ids = array_merge($ids, $this->descendantIdsOf($child, $visited));
         }
 
-        return $ids;
+        return array_values(array_unique($ids));
     }
 }

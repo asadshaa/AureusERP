@@ -16,9 +16,9 @@ use Webkul\Accounting\Enums\BankReviewStatus;
 use Webkul\Accounting\Enums\ConversionStatus;
 use Webkul\Accounting\Exceptions\MissingExchangeRateException;
 use Webkul\Accounting\Models\BankTransactionMapping;
-use Webkul\Accounting\Models\FsTag;
 use Webkul\Accounting\Services\Currency\CompanyCurrencyService;
 use Webkul\Accounting\Services\Currency\ExchangeRateService;
+use Webkul\Accounting\Services\FsTagService;
 use Webkul\Support\Models\Company;
 use Webkul\Support\Models\Currency;
 
@@ -209,15 +209,9 @@ class BankStatementImportService
                     ? trim((string) ($transaction->rawRow[$fsTagIndex] ?? ''))
                     : '';
 
-                $fsTag = null;
-
-                if ($fsTagCode !== '') {
-                    $fsTag = FsTag::query()
-                        ->where('company_id', $company->id)
-                        ->where('code', $fsTagCode)
-                        ->where('is_active', true)
-                        ->first();
-                }
+                $fsTag = $fsTagCode !== ''
+                    ? app(FsTagService::class)->resolve($company->id, $fsTagCode)
+                    : null;
 
                 BankTransactionMapping::query()->create([
                     'company_id'           => $company->id,
@@ -302,28 +296,28 @@ class BankStatementImportService
                 $companyDebits = $companyDebits->plus($companyDebit);
                 $companyCredits = $companyCredits->plus($companyCredit);
                 $transactions[] = [
-                    'company_debit'        => $companyDebit,
-                    'company_credit'       => $companyCredit,
+                    'company_debit'         => $companyDebit,
+                    'company_credit'        => $companyCredit,
                     'company_signed_amount' => $companySigned,
-                    'exchange_rate_id'     => $rate->recordId,
-                    'exchange_rate'        => $rate->rate,
-                    'rate_date'            => $rate->effectiveDate,
-                    'rate_source'          => $rate->source,
-                    'rate_type'            => $rate->type,
-                    'conversion_status'    => ConversionStatus::Complete->value,
+                    'exchange_rate_id'      => $rate->recordId,
+                    'exchange_rate'         => $rate->rate,
+                    'rate_date'             => $rate->effectiveDate,
+                    'rate_source'           => $rate->source,
+                    'rate_type'             => $rate->type,
+                    'conversion_status'     => ConversionStatus::Complete->value,
                 ];
             } catch (MissingExchangeRateException) {
                 $complete = false;
                 $transactions[] = [
-                    'company_debit'     => null,
-                    'company_credit' => null,
+                    'company_debit'         => null,
+                    'company_credit'        => null,
                     'company_signed_amount' => null,
-                    'exchange_rate_id'  => null,
-                    'exchange_rate' => null,
-                    'rate_date' => $date,
-                    'rate_source'       => null,
-                    'rate_type' => 'transaction',
-                    'conversion_status' => ConversionStatus::MissingRate->value,
+                    'exchange_rate_id'      => null,
+                    'exchange_rate'         => null,
+                    'rate_date'             => $date,
+                    'rate_source'           => null,
+                    'rate_type'             => 'transaction',
+                    'conversion_status'     => ConversionStatus::MissingRate->value,
                 ];
             }
         }

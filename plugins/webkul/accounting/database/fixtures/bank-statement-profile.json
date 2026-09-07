@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "profile": {
+    "name": "Demo HBL Bank Statement (CSV)",
+    "entity_type": "bank_statement",
+    "file_type": "csv",
+    "sheet_name": null,
+    "header_row": 7,
+    "data_start_row": 8,
+    "skip_rows": 0,
+    "blank_row_rule": "skip",
+    "failure_policy": "reject_rows",
+    "stop_rule": null,
+    "delimiter": ",",
+    "encoding": "UTF-8",
+    "version": 1
+  },
+  "mappings": [
+    {
+      "position": 1,
+      "source_header": "Transaction Date",
+      "source_position": null,
+      "source_aliases": [
+        "Txn Date",
+        "Date"
+      ],
+      "target_field": "date",
+      "transformations": [
+        {
+          "type": "trim"
+        },
+        {
+          "type": "date",
+          "format": "d-M-Y",
+          "output": "Y-m-d"
+        }
+      ],
+      "validation_rules": [
+        "date"
+      ],
+      "is_required": true
+    },
+    {
+      "position": 2,
+      "source_header": "Value Date",
+      "source_position": null,
+      "source_aliases": [],
+      "target_field": "value_date",
+      "transformations": [
+        {
+          "type": "trim"
+        },
+        {
+          "type": "date",
+          "format": "d-M-Y",
+          "output": "Y-m-d"
+        }
+      ],
+      "validation_rules": [
+        "date"
+      ],
+      "is_required": false
+    },
+    {
+      "position": 3,
+      "source_header": "Description",
+      "source_position": null,
+      "source_aliases": [
+        "Particulars",
+        "Narrative"
+      ],
+      "target_field": "description",
+      "transformations": [
+        {
+          "type": "trim"
+        }
+      ],
+      "validation_rules": [],
+      "is_required": true
+    },
+    {
+      "position": 4,
+      "source_header": "Reference",
+      "source_position": null,
+      "source_aliases": [
+        "Cheque No",
+        "Ref No"
+      ],
+      "target_field": "reference",
+      "transformations": [
+        {
+          "type": "trim"
+        }
+      ],
+      "validation_rules": [],
+      "is_required": false
+    },
+    {
+      "position": 5,
+      "source_header": "Debit (PKR)",
+      "source_position": null,
+      "source_aliases": [
+        "Debit",
+        "Withdrawal"
+      ],
+      "target_field": "debit",
+      "transformations": [
+        {
+          "type": "decimal"
+        }
+      ],
+      "validation_rules": [
+        "numeric"
+      ],
+      "is_required": false
+    },
+    {
+      "position": 6,
+      "source_header": "Credit (PKR)",
+      "source_position": null,
+      "source_aliases": [
+        "Credit",
+        "Deposit"
+      ],
+      "target_field": "credit",
+      "transformations": [
+        {
+          "type": "decimal"
+        }
+      ],
+      "validation_rules": [
+        "numeric"
+      ],
+      "is_required": false
+    },
+    {
+      "position": 7,
+      "source_header": "Balance (PKR)",
+      "source_position": null,
+      "source_aliases": [
+        "Balance",
+        "Running Balance"
+      ],
+      "target_field": "balance",
+      "transformations": [
+        {
+          "type": "decimal"
+        }
+      ],
+      "validation_rules": [
+        "numeric"
+      ],
+      "is_required": false
+    },
+    {
+      "position": 8,
+      "source_header": "FS Tag",
+      "source_position": null,
+      "source_aliases": [
+        "FS Tag Code",
+        "Tag"
+      ],
+      "target_field": "fs_tag",
+      "transformations": [
+        {
+          "type": "trim"
+        }
+      ],
+      "validation_rules": [],
+      "is_required": false
+    },
+    {
+      "position": 9,
+      "source_header": null,
+      "source_position": null,
+      "source_aliases": [],
+      "target_field": "currency",
+      "transformations": [
+        {
+          "type": "default",
+          "value": "PKR"
+        }
+      ],
+      "validation_rules": [],
+      "is_required": true
+    },
+    {
+      "position": 10,
+      "source_header": null,
+      "source_position": null,
+      "source_aliases": [],
+      "target_field": "bank_account_number",
+      "transformations": [
+        {
+          "type": "default",
+          "value": "PK55DEMO0000000000000001"
+        }
+      ],
+      "validation_rules": [],
+      "is_required": true
+    },
+    {
+      "position": 11,
+      "source_header": null,
+      "source_position": null,
+      "source_aliases": [],
+      "target_field": "journal_code",
+      "transformations": [
+        {
+          "type": "default",
+          "value": "DBNK"
+        }
+      ],
+      "validation_rules": [],
+      "is_required": true
+    },
+    {
+      "position": 12,
+      "source_header": null,
+      "source_position": null,
+      "source_aliases": [],
+      "target_field": "bank_gl_code",
+      "transformations": [
+        {
+          "type": "default",
+          "value": "1028"
+        }
+      ],
+      "validation_rules": [],
+      "is_required": true
+    }
+  ],
+  "rules": []
+}
