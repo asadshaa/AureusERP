@@ -16,6 +16,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
 use Webkul\Employee\Filament\Resources\PerformanceReviewResource\Pages\ManagePerformanceReviews;
 use Webkul\Employee\Models\PerformanceReview;
+use Webkul\Employee\Services\HrHierarchyService;
 use Webkul\Employee\Support\HrPermissions;
 use Webkul\Support\Enums\NavigationGroup;
 
@@ -73,9 +74,27 @@ class PerformanceReviewResource extends Resource
         ])->recordActions([EditAction::make()]);
     }
 
+    /**
+     * Company scoping alone let any user holding hr_manage_performance see
+     * every employee's ratings and review comments. Scope to the
+     * requesting user's HR hierarchy, matching every other personal-data
+     * list in this module. Note: PerformanceCycle itself (the
+     * cycle/campaign record — name, dates, status) carries no employee_id
+     * and is intentionally left company-scoped only; it is administrative
+     * configuration, not an individual's data — PerformanceCycleResource
+     * is unchanged.
+     */
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->where('company_id', Auth::user()?->default_company_id);
+        $user = Auth::user();
+        $companyId = (int) $user?->default_company_id;
+
+        return parent::getEloquentQuery()
+            ->where('company_id', $companyId)
+            ->whereIn(
+                'employee_id',
+                $user ? app(HrHierarchyService::class)->visibleEmployeeIds($user, $companyId) : [],
+            );
     }
 
     public static function canViewAny(): bool

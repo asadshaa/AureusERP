@@ -1,18 +1,24 @@
 <?php
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
 use Webkul\Account\Enums\AccountType;
 use Webkul\Account\Enums\JournalType;
 use Webkul\Account\Enums\MoveState;
 use Webkul\Account\Models\Account;
 use Webkul\Account\Models\Journal;
+use Webkul\Employee\Filament\Clusters\Reportings\Resources\EmployeeSkillResource;
+use Webkul\Employee\Filament\Resources\AttendanceRecordResource;
+use Webkul\Employee\Filament\Resources\PerformanceReviewResource;
 use Webkul\Employee\Models\AttendanceRecord;
 use Webkul\Employee\Models\Department;
 use Webkul\Employee\Models\Employee;
 use Webkul\Employee\Models\EmployeeJobPosition;
 use Webkul\Employee\Models\EmployeeRequest;
 use Webkul\Employee\Models\EmployeeRequestType;
+use Webkul\Employee\Models\EmployeeSkill;
 use Webkul\Employee\Models\PerformanceCycle;
+use Webkul\Employee\Models\PerformanceReview;
 use Webkul\Employee\Services\EmployeeRequestService;
 use Webkul\Employee\Services\EmployeeSensitiveChangeService;
 use Webkul\Employee\Services\HrAnalyticsService;
@@ -26,6 +32,8 @@ use Webkul\Recruitment\Models\Applicant;
 use Webkul\Recruitment\Models\Candidate;
 use Webkul\Recruitment\Services\ApplicantIntakeService;
 use Webkul\Recruitment\Services\CandidateConversionService;
+use Webkul\Security\Enums\PermissionType;
+use Webkul\Security\Models\Permission;
 use Webkul\Security\Models\Role;
 use Webkul\Security\Models\Team;
 use Webkul\Security\Models\User;
@@ -34,13 +42,28 @@ use Webkul\Support\Models\Company;
 use Webkul\Support\Models\Currency;
 use Webkul\Support\Services\ApprovalEngine;
 use Webkul\TimeOff\Enums\State as LeaveState;
+use Webkul\TimeOff\Filament\Clusters\Management\Resources\AllocationResource;
 use Webkul\TimeOff\Filament\Clusters\Management\Resources\TimeOffResource;
+use Webkul\TimeOff\Filament\Clusters\MyTime\Resources\MyAllocationResource;
 use Webkul\TimeOff\Filament\Clusters\MyTime\Resources\MyTimeOffResource;
 use Webkul\TimeOff\Models\Leave;
+use Webkul\TimeOff\Models\LeaveAllocation;
 use Webkul\TimeOff\Models\LeaveType;
 use Webkul\TimeOff\Services\LeaveApprovalService;
+use Webkul\Timesheet\Filament\Resources\TimesheetResource;
 use Webkul\Timesheet\Models\Timesheet;
 use Webkul\Timesheet\Services\TimesheetWorkflowService;
+
+/**
+ * Grants a single permission by name to a user without going through a role,
+ * so a test can hold exactly the permissions it needs — critically, without
+ * hr_view_all_records, which would bypass the hierarchy scoping under test.
+ */
+function hrPlatformGrant(User $user, string $permissionName): void
+{
+    $permission = Permission::query()->firstOrCreate(['name' => $permissionName, 'guard_name' => 'web']);
+    $user->givePermissionTo($permission);
+}
 
 function hrPlatformUser(Company $company): User
 {
@@ -468,6 +491,228 @@ it('scopes recruitment and leave resources to the active company and current emp
         ->and(RecruitmentApplicantResource::getEloquentQuery()->pluck('company_id')->unique()->all())->toBe([$company->id])
         ->and(TimeOffResource::getEloquentQuery()->pluck('company_id')->unique()->all())->toBe([$company->id])
         ->and(MyTimeOffResource::getEloquentQuery()->pluck('employee_id')->all())->toBe([$employee->id]);
+});
+
+it('confines EmployeePolicy record access to the HR hierarchy, blocks cross-company access, and does not crash for a group-scoped user', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $otherCompany = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+
+    $managerUser = hrPlatformUser($company);
+    $employeeUser = hrPlatformUser($company);
+    $unrelatedUser = hrPlatformUser($company);
+    $outsiderUser = hrPlatformUser($otherCompany);
+    foreach ([$managerUser, $employeeUser, $unrelatedUser, $outsiderUser] as $user) {
+        hrPlatformGrant($user, 'view_employee_employee');
+        hrPlatformGrant($user, 'update_employee_employee');
+    }
+
+    $manager = hrPlatformEmployee($company, $managerUser, 'Policy Test Manager');
+    $employee = hrPlatformEmployee($company, $employeeUser, 'Policy Test Report', $manager);
+    hrPlatformEmployee($company, $unrelatedUser, 'Policy Test Colleague');
+    $outsiderEmployee = hrPlatformEmployee($otherCompany, $outsiderUser, 'Policy Test Outsider');
+
+    // Manager can view and manage their own report (hierarchy).
+    expect(Gate::forUser($managerUser)->allows('view', $employee))->toBeTrue()
+        ->and(Gate::forUser($managerUser)->allows('update', $employee))->toBeTrue();
+
+    // The employee can view their own record — the hierarchy service always
+    // includes the requesting user's own employee id.
+    expect(Gate::forUser($employeeUser)->allows('view', $employee))->toBeTrue();
+
+    // A same-company colleague with no hierarchy relationship to this
+    // employee is denied.
+    expect(Gate::forUser($unrelatedUser)->allows('view', $employee))->toBeFalse();
+
+    // Cross-company access fails explicitly, both for read and write.
+    expect(Gate::forUser($managerUser)->allows('view', $outsiderEmployee))->toBeFalse()
+        ->and(Gate::forUser($managerUser)->allows('update', $outsiderEmployee))->toBeFalse();
+
+    // A GROUP-scoped user with no shared team must be denied without a
+    // fatal error. Before this fix, EmployeePolicy delegated to
+    // HasScopedPermissions::hasGroupAccess(), which dereferences
+    // $owner->teams — a relation the Employee model (the 'coach' owner
+    // attribute resolves to an Employee) does not define — and would throw.
+    $unrelatedUser->forceFill(['resource_permission' => PermissionType::GROUP])->saveQuietly();
+    expect(fn () => Gate::forUser($unrelatedUser)->allows('view', $employee))->not->toThrow(Throwable::class);
+    expect(Gate::forUser($unrelatedUser)->allows('view', $employee))->toBeFalse();
+});
+
+it('adds a record-level hierarchy check to LeavePolicy and LeaveAllocationPolicy view/update/delete', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $otherCompany = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+
+    $managerUser = hrPlatformUser($company);
+    $employeeUser = hrPlatformUser($company);
+    $unrelatedUser = hrPlatformUser($company);
+    $outsiderUser = hrPlatformUser($otherCompany);
+    $this->actingAs($managerUser);
+    foreach ([$managerUser, $employeeUser, $unrelatedUser, $outsiderUser] as $user) {
+        hrPlatformGrant($user, 'view_time_off_time::off');
+        hrPlatformGrant($user, 'update_time_off_time::off');
+        hrPlatformGrant($user, 'view_time_off_my::allocation');
+        hrPlatformGrant($user, 'update_time_off_my::allocation');
+    }
+
+    $manager = hrPlatformEmployee($company, $managerUser, 'Leave Policy Manager');
+    $employee = hrPlatformEmployee($company, $employeeUser, 'Leave Policy Report', $manager);
+    hrPlatformEmployee($company, $unrelatedUser, 'Leave Policy Colleague');
+    hrPlatformEmployee($otherCompany, $outsiderUser, 'Leave Policy Outsider');
+
+    $leaveType = LeaveType::query()->create(['company_id' => $company->id, 'name' => 'Policy Test Leave', 'is_active' => true]);
+    $leave = Leave::query()->create([
+        'company_id'          => $company->id,
+        'employee_company_id' => $company->id,
+        'employee_id'         => $employee->id,
+        'user_id'             => $employeeUser->id,
+        'holiday_status_id'   => $leaveType->id,
+        'state'               => LeaveState::CONFIRM,
+    ]);
+    $allocation = LeaveAllocation::query()->create([
+        'employee_company_id' => $company->id,
+        'employee_id'         => $employee->id,
+        'holiday_status_id'   => $leaveType->id,
+        'name'                => 'Policy Test Allocation',
+        'state'               => 'confirm',
+        'allocation_type'     => 'regular',
+        'number_of_days'      => 5,
+    ]);
+
+    // Before this fix, LeavePolicy::view() and every LeaveAllocationPolicy
+    // method checked only the list-level permission string — no company or
+    // hierarchy check at all.
+    expect(Gate::forUser($managerUser)->allows('view', $leave))->toBeTrue()
+        ->and(Gate::forUser($employeeUser)->allows('view', $leave))->toBeTrue()
+        ->and(Gate::forUser($unrelatedUser)->allows('view', $leave))->toBeFalse()
+        ->and(Gate::forUser($outsiderUser)->allows('view', $leave))->toBeFalse()
+        ->and(Gate::forUser($managerUser)->allows('view', $allocation))->toBeTrue()
+        ->and(Gate::forUser($managerUser)->allows('update', $allocation))->toBeTrue()
+        ->and(Gate::forUser($unrelatedUser)->allows('view', $allocation))->toBeFalse()
+        ->and(Gate::forUser($outsiderUser)->allows('update', $allocation))->toBeFalse();
+});
+
+it('scopes the allocation, employee-skill, attendance, performance-review and timesheet resources to company and HR hierarchy', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $otherCompany = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+
+    $managerUser = hrPlatformUser($company);
+    $employeeUser = hrPlatformUser($company);
+    $unrelatedUser = hrPlatformUser($company);
+    $outsiderUser = hrPlatformUser($otherCompany);
+    $this->actingAs($managerUser);
+
+    $manager = hrPlatformEmployee($company, $managerUser, 'Resource Scope Manager');
+    $employee = hrPlatformEmployee($company, $employeeUser, 'Resource Scope Report', $manager);
+    $unrelatedEmployee = hrPlatformEmployee($company, $unrelatedUser, 'Resource Scope Colleague');
+    $outsiderEmployee = hrPlatformEmployee($otherCompany, $outsiderUser, 'Resource Scope Outsider');
+
+    $leaveType = LeaveType::query()->create(['company_id' => $company->id, 'name' => 'Resource Scope Leave', 'is_active' => true]);
+
+    // AllocationResource / MyAllocationResource: company column here is
+    // employee_company_id, not company_id — a previous grep-driven fix
+    // would miss it. No scoping at all existed before this fix.
+    $visibleAllocation = LeaveAllocation::query()->create([
+        'employee_company_id' => $company->id,
+        'employee_id'         => $employee->id,
+        'holiday_status_id'   => $leaveType->id,
+        'name'                => 'Visible Allocation',
+        'state'               => 'confirm',
+        'allocation_type'     => 'regular',
+        'number_of_days'      => 5,
+    ]);
+    LeaveAllocation::query()->create([
+        'employee_company_id' => $company->id,
+        'employee_id'         => $unrelatedEmployee->id,
+        'holiday_status_id'   => $leaveType->id,
+        'name'                => 'Colleague Allocation',
+        'state'               => 'confirm',
+        'allocation_type'     => 'regular',
+        'number_of_days'      => 5,
+    ]);
+    LeaveAllocation::query()->create([
+        'employee_company_id' => $otherCompany->id,
+        'employee_id'         => $outsiderEmployee->id,
+        'holiday_status_id'   => $leaveType->id,
+        'name'                => 'Outsider Allocation',
+        'state'               => 'confirm',
+        'allocation_type'     => 'regular',
+        'number_of_days'      => 5,
+    ]);
+
+    expect(AllocationResource::getEloquentQuery()->pluck('employee_id')->all())->toBe([$employee->id]);
+
+    $this->actingAs($employeeUser);
+    expect(MyAllocationResource::getEloquentQuery()->pluck('id')->all())->toBe([$visibleAllocation->id]);
+    $this->actingAs($managerUser);
+
+    // EmployeeSkillResource: no company column of its own — scoped via the
+    // employee relation. No scoping at all existed before this fix.
+    $visibleSkill = EmployeeSkill::query()->create(['employee_id' => $employee->id]);
+    EmployeeSkill::query()->create(['employee_id' => $outsiderEmployee->id]);
+    expect(EmployeeSkillResource::getEloquentQuery()->pluck('id')->all())->toBe([$visibleSkill->id]);
+
+    // AttendanceRecordResource: was company-scoped only, so a colleague's
+    // record was visible to any user holding hr_manage_attendance.
+    $visibleAttendance = AttendanceRecord::query()->create([
+        'company_id'  => $company->id,
+        'employee_id' => $employee->id,
+        'date'        => '2026-09-01',
+    ]);
+    AttendanceRecord::query()->create([
+        'company_id'  => $company->id,
+        'employee_id' => $unrelatedEmployee->id,
+        'date'        => '2026-09-01',
+    ]);
+    AttendanceRecord::query()->create([
+        'company_id'  => $otherCompany->id,
+        'employee_id' => $outsiderEmployee->id,
+        'date'        => '2026-09-01',
+    ]);
+    expect(AttendanceRecordResource::getEloquentQuery()->pluck('id')->all())->toBe([$visibleAttendance->id]);
+
+    // PerformanceReviewResource: same defect as attendance. PerformanceCycle
+    // itself is intentionally left company-scoped only — it carries no
+    // employee_id, it is the cycle/campaign record, not personal data.
+    $cycle = PerformanceCycle::query()->create([
+        'company_id' => $company->id,
+        'name'       => 'Resource Scope Cycle',
+        'starts_on'  => '2026-01-01',
+        'ends_on'    => '2026-12-31',
+        'status'     => 'active',
+    ]);
+    $visibleReview = PerformanceReview::query()->create([
+        'company_id' => $company->id,
+        'cycle_id'   => $cycle->id,
+        'employee_id'=> $employee->id,
+    ]);
+    PerformanceReview::query()->create([
+        'company_id' => $company->id,
+        'cycle_id'   => $cycle->id,
+        'employee_id'=> $unrelatedEmployee->id,
+    ]);
+    expect(PerformanceReviewResource::getEloquentQuery()->pluck('id')->all())->toBe([$visibleReview->id]);
+
+    // TimesheetResource: keyed by user_id, not employee_id — exercises the
+    // Employee -> user_id bridge added on HrHierarchyService.
+    $visibleTimesheet = Timesheet::query()->create([
+        'type'        => 'projects',
+        'company_id'  => $company->id,
+        'user_id'     => $employeeUser->id,
+        'date'        => '2026-09-01',
+        'name'        => 'Resource scope entry',
+        'unit_amount' => '4.0000',
+    ]);
+    Timesheet::query()->create([
+        'type'        => 'projects',
+        'company_id'  => $company->id,
+        'user_id'     => $unrelatedUser->id,
+        'date'        => '2026-09-01',
+        'name'        => 'Colleague entry',
+        'unit_amount' => '4.0000',
+    ]);
+    expect(TimesheetResource::getEloquentQuery()->pluck('id')->all())->toBe([$visibleTimesheet->id]);
 });
 
 it('renders the integrated HR Filament pages for an administrator', function (): void {

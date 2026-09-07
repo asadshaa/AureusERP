@@ -81,9 +81,55 @@ class HrHierarchyService
 
     public function assertCanManage(User $user, Employee $employee): void
     {
-        if (! $this->visibleEmployeeIds($user, (int) $employee->company_id)->contains((int) $employee->id)) {
+        if (! $this->canManage($user, $employee)) {
             throw new RuntimeException('The employee is outside this user’s HR hierarchy scope.');
         }
+    }
+
+    /**
+     * Non-throwing form of assertCanManage(), for use in policy gates that
+     * must return a boolean rather than raise. Company access failures and
+     * "outside the hierarchy" are both simply "cannot manage" here — the
+     * caller does not need to distinguish them to make an authorization
+     * decision.
+     */
+    public function canManage(User $user, Employee $employee): bool
+    {
+        if (! $employee->company_id) {
+            return false;
+        }
+
+        try {
+            return $this->visibleEmployeeIds($user, (int) $employee->company_id)->contains((int) $employee->id);
+        } catch (RuntimeException) {
+            return false;
+        }
+    }
+
+    /**
+     * The Security-guard user_id's behind every employee this user may
+     * manage, for resources keyed by user_id rather than employee_id
+     * (e.g. Timesheet). Returns an empty collection under the same
+     * conditions visibleEmployeeIds() would.
+     *
+     * @return Collection<int, int>
+     */
+    public function visibleUserIds(User $user, int $companyId): Collection
+    {
+        $employeeIds = $this->visibleEmployeeIds($user, $companyId);
+
+        if ($employeeIds->isEmpty()) {
+            return collect();
+        }
+
+        return Employee::query()
+            ->where('company_id', $companyId)
+            ->whereIn('id', $employeeIds)
+            ->whereNotNull('user_id')
+            ->pluck('user_id')
+            ->map(fn ($id): int => (int) $id)
+            ->unique()
+            ->values();
     }
 
     private function assertCompanyAccess(User $user, int $companyId): void

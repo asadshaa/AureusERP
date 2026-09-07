@@ -17,6 +17,8 @@ use Filament\Tables\Filters\QueryBuilder\Constraints\RelationshipConstraint\Oper
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Grouping\Group;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Auth;
 use Webkul\Employee\Filament\Clusters\Reportings;
 use Webkul\Employee\Filament\Clusters\Reportings\Resources\EmployeeSkillResource\Pages\ListEmployeeSkills;
 use Webkul\Employee\Models\EmployeeSkill;
@@ -217,6 +219,21 @@ class EmployeeSkillResource extends Resource
     public static function getSlug(?Panel $panel = null): string
     {
         return 'employees/skills';
+    }
+
+    /**
+     * This resource had no query scoping at all: any user reaching the
+     * screen could list every company's employee skills. EmployeeSkill has
+     * no company column of its own, so scope through the employee it
+     * belongs to.
+     */
+    public static function getEloquentQuery(): Builder
+    {
+        return parent::getEloquentQuery()
+            ->whereHas('employee', fn (Builder $query): Builder => $query->where(
+                'company_id',
+                Auth::user()?->default_company_id,
+            ));
     }
 
     public static function getPages(): array

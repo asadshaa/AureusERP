@@ -26,8 +26,11 @@ use Filament\Schemas\Schema;
 use Filament\Tables;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Auth;
 use Webkul\Chatter\Filament\Actions\ActivityTableAction;
+use Webkul\Employee\Services\HrHierarchyService;
 use Webkul\Field\Filament\Forms\Components\ProgressStepper as FormProgressStepper;
 use Webkul\Field\Filament\Infolists\Components\ProgressStepper as InfolistProgressStepper;
 use Webkul\TimeOff\Enums\AllocationType;
@@ -353,5 +356,27 @@ class AllocationResource extends Resource
             'edit'   => EditAllocation::route('/{record}/edit'),
             'view'   => ViewAllocation::route('/{record}'),
         ];
+    }
+
+    /**
+     * This resource had no query scoping at all: any user reaching the
+     * screen could list, edit or delete another company's leave
+     * allocations by id. The company column here is `employee_company_id`,
+     * not `company_id` — grepping for the latter misses it. Also scoped to
+     * the requesting user's HR hierarchy, matching TimeOffResource
+     * (the sibling "Management" resource this one sits beside) so the two
+     * do not end up with mismatched visibility for equally personal data.
+     */
+    public static function getEloquentQuery(): Builder
+    {
+        $user = Auth::user();
+        $companyId = (int) $user?->default_company_id;
+
+        return parent::getEloquentQuery()
+            ->where('employee_company_id', $companyId)
+            ->whereIn(
+                'employee_id',
+                $user ? app(HrHierarchyService::class)->visibleEmployeeIds($user, $companyId) : [],
+            );
     }
 }

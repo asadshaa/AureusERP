@@ -3,12 +3,15 @@
 namespace Webkul\TimeOff\Policies;
 
 use Illuminate\Auth\Access\HandlesAuthorization;
+use Webkul\Employee\Services\HrHierarchyService;
 use Webkul\Security\Models\User;
 use Webkul\TimeOff\Models\LeaveAllocation;
 
 class LeaveAllocationPolicy
 {
     use HandlesAuthorization;
+
+    public function __construct(protected HrHierarchyService $hierarchy) {}
 
     /**
      * Determine whether the user can view any models.
@@ -20,10 +23,19 @@ class LeaveAllocationPolicy
 
     /**
      * Determine whether the user can view the model.
+     *
+     * Record-level check added: previously this method checked only the
+     * list-level permission string, with no company or hierarchy check at
+     * all, so any user holding the permission could view any company's
+     * leave allocation by id.
      */
     public function view(User $user, LeaveAllocation $leaveAllocation): bool
     {
-        return $user->can('view_time_off_my::allocation');
+        if (! $user->can('view_time_off_my::allocation')) {
+            return false;
+        }
+
+        return $leaveAllocation->employee && $this->hierarchy->canManage($user, $leaveAllocation->employee);
     }
 
     /**
@@ -39,7 +51,11 @@ class LeaveAllocationPolicy
      */
     public function update(User $user, LeaveAllocation $leaveAllocation): bool
     {
-        return $user->can('update_time_off_my::allocation');
+        if (! $user->can('update_time_off_my::allocation')) {
+            return false;
+        }
+
+        return $leaveAllocation->employee && $this->hierarchy->canManage($user, $leaveAllocation->employee);
     }
 
     /**
@@ -47,7 +63,11 @@ class LeaveAllocationPolicy
      */
     public function delete(User $user, LeaveAllocation $leaveAllocation): bool
     {
-        return $user->can('delete_time_off_my::allocation');
+        if (! $user->can('delete_time_off_my::allocation')) {
+            return false;
+        }
+
+        return $leaveAllocation->employee && $this->hierarchy->canManage($user, $leaveAllocation->employee);
     }
 
     /**

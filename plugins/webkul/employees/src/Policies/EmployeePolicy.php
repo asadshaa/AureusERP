@@ -4,12 +4,14 @@ namespace Webkul\Employee\Policies;
 
 use Illuminate\Auth\Access\HandlesAuthorization;
 use Webkul\Employee\Models\Employee;
+use Webkul\Employee\Services\HrHierarchyService;
 use Webkul\Security\Models\User;
-use Webkul\Security\Traits\HasScopedPermissions;
 
 class EmployeePolicy
 {
-    use HandlesAuthorization, HasScopedPermissions;
+    use HandlesAuthorization;
+
+    public function __construct(protected HrHierarchyService $hierarchy) {}
 
     /**
      * Determine whether the user can view any models.
@@ -21,10 +23,23 @@ class EmployeePolicy
 
     /**
      * Determine whether the user can view the model.
+     *
+     * Record-level check added: the "employee_employee" permission alone
+     * only says the user may view *some* employee record, not this one.
+     * Scope is delegated to HrHierarchyService, the single authority for
+     * HR visibility (company + reporting hierarchy + department/team
+     * management), rather than the generic HasScopedPermissions trait,
+     * which keyed on the `coach` relation — a different (and, for GROUP
+     * permission, crash-prone) notion of "my people" than the hierarchy
+     * this policy is meant to enforce.
      */
     public function view(User $user, Employee $employee): bool
     {
-        return $user->can('view_employee_employee');
+        if (! $user->can('view_employee_employee')) {
+            return false;
+        }
+
+        return $this->hierarchy->canManage($user, $employee);
     }
 
     /**
@@ -44,7 +59,7 @@ class EmployeePolicy
             return false;
         }
 
-        return $this->hasAccess($user, $employee, 'coach');
+        return $this->hierarchy->canManage($user, $employee);
     }
 
     /**
@@ -56,7 +71,7 @@ class EmployeePolicy
             return false;
         }
 
-        return $this->hasAccess($user, $employee, 'coach');
+        return $this->hierarchy->canManage($user, $employee);
     }
 
     /**
@@ -76,7 +91,7 @@ class EmployeePolicy
             return false;
         }
 
-        return $this->hasAccess($user, $employee, 'coach');
+        return $this->hierarchy->canManage($user, $employee);
     }
 
     /**
@@ -96,6 +111,6 @@ class EmployeePolicy
             return false;
         }
 
-        return $this->hasAccess($user, $employee, 'coach');
+        return $this->hierarchy->canManage($user, $employee);
     }
 }

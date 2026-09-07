@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
 use Webkul\Employee\Filament\Resources\AttendanceRecordResource\Pages\ManageAttendanceRecords;
 use Webkul\Employee\Models\AttendanceRecord;
+use Webkul\Employee\Services\HrHierarchyService;
 use Webkul\Employee\Support\HrPermissions;
 use Webkul\Support\Enums\NavigationGroup;
 
@@ -88,9 +89,24 @@ class AttendanceRecordResource extends Resource
             ->headerActions([CreateAction::make()]);
     }
 
+    /**
+     * Company scoping alone let any user holding hr_manage_attendance see
+     * every employee's attendance records. Attendance is personal data;
+     * scope to the requesting user's HR hierarchy, same as the other
+     * employee-data lists. Users granted hr_view_all_records still see
+     * everything, via HrHierarchyService's own bypass.
+     */
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->where('company_id', Auth::user()?->default_company_id);
+        $user = Auth::user();
+        $companyId = (int) $user?->default_company_id;
+
+        return parent::getEloquentQuery()
+            ->where('company_id', $companyId)
+            ->whereIn(
+                'employee_id',
+                $user ? app(HrHierarchyService::class)->visibleEmployeeIds($user, $companyId) : [],
+            );
     }
 
     public static function canViewAny(): bool

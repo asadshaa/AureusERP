@@ -29,6 +29,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
+use Webkul\Employee\Services\HrHierarchyService;
 use Webkul\Support\Enums\NavigationGroup;
 use Webkul\Support\Services\ApprovalEngine;
 use Webkul\Timesheet\Filament\Resources\TimesheetResource\Pages\ManageTimesheets;
@@ -319,8 +320,23 @@ class TimesheetResource extends Resource
         ];
     }
 
+    /**
+     * Company scoping alone let any user see every employee's logged hours.
+     * Timesheet is keyed by user_id, not employee_id, so hierarchy
+     * membership is resolved via HrHierarchyService::visibleUserIds()
+     * (Employee -> user_id), rather than the employee_id filter used on
+     * the employee-keyed resources.
+     */
     public static function getEloquentQuery(): Builder
     {
-        return parent::getEloquentQuery()->where('company_id', Auth::user()?->default_company_id);
+        $user = Auth::user();
+        $companyId = (int) $user?->default_company_id;
+
+        return parent::getEloquentQuery()
+            ->where('company_id', $companyId)
+            ->whereIn(
+                'user_id',
+                $user ? app(HrHierarchyService::class)->visibleUserIds($user, $companyId) : [],
+            );
     }
 }

@@ -26,6 +26,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Webkul\Chatter\Filament\Actions\ActivityTableAction;
+use Webkul\Employee\Services\HrHierarchyService;
 use Webkul\Support\Services\ApprovalEngine;
 use Webkul\TimeOff\Enums\State;
 use Webkul\TimeOff\Filament\Clusters\Management;
@@ -298,7 +299,18 @@ class TimeOffResource extends Resource
 
     public static function getEloquentQuery(): Builder
     {
+        // Company scoping alone let any user holding the list permission see
+        // every employee's leave requests. Also restrict to the requesting
+        // user's HR hierarchy (self + reports + managed department/team),
+        // matching the record-level check in LeavePolicy.
+        $user = Auth::user();
+        $companyId = (int) $user?->default_company_id;
+
         return parent::getEloquentQuery()
-            ->where('company_id', Auth::user()?->default_company_id);
+            ->where('company_id', $companyId)
+            ->whereIn(
+                'employee_id',
+                $user ? app(HrHierarchyService::class)->visibleEmployeeIds($user, $companyId) : [],
+            );
     }
 }

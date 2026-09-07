@@ -26,6 +26,7 @@ use Filament\Schemas\Schema;
 use Filament\Tables;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
 use Webkul\Field\Filament\Forms\Components\ProgressStepper as FormProgressStepper;
 use Webkul\Field\Filament\Infolists\Components\ProgressStepper as InfolistProgressStepper;
@@ -317,6 +318,20 @@ class MyAllocationResource extends Resource
                         ])->columnSpan(1),
                     ])->columnSpanFull(),
             ]);
+    }
+
+    /**
+     * Only the table query was scoped (via modifyQueryUsing() in the table()
+     * method above), which does not protect direct View/Edit/Delete access
+     * by record id. Mirrors MyTimeOffResource's pattern: company plus
+     * "this is my own record" — the column here is `employee_company_id`,
+     * not `company_id`.
+     */
+    public static function getEloquentQuery(): Builder
+    {
+        return parent::getEloquentQuery()
+            ->where('employee_company_id', Auth::user()?->default_company_id)
+            ->whereHas('employee', fn (Builder $query): Builder => $query->where('user_id', Auth::id()));
     }
 
     public static function getPages(): array
