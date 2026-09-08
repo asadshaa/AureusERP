@@ -22,7 +22,8 @@ found the audit's own process had let 6 of the 14 through incorrectly:
   calls. Both verifier agents asserted the lock didn't exist despite it being in the file they
   reviewed. This is flagged here as a process failure, not swept under the rug.
 
-**8 distinct, new, confirmed bugs remain**, none fixed yet.
+**8 distinct, new, confirmed bugs remain.** All 4 P0 items are now fixed (commit `be61a8d`); P1
+items 5–8 are still open.
 
 ---
 
@@ -49,9 +50,9 @@ All five are confirmed fixed on this branch as of commit `52b5d44`.
 
 ---
 
-## P0 — Silent financial data corruption
+## P0 — Silent financial data corruption (all fixed, commit `be61a8d`)
 
-### 1. A reversed journal entry doesn't actually cancel the original
+### 1. A reversed journal entry doesn't actually cancel the original — FIXED
 `plugins/webkul/accounts/src/AccountManager.php:2011`
 
 `reverseMoves()` flips a reversal line's `balance` and `amount_currency` by directly calling
@@ -62,7 +63,7 @@ flipped balance. The persisted `debit`/`credit` columns stay identical to the or
 rather than a cancellation. A posted entry (debit=100/credit=0) "reversed" still shows debit=100
 afterward instead of credit=100.
 
-### 2. An unbalanced journal entry can be posted
+### 2. An unbalanced journal entry can be posted — FIXED
 `plugins/webkul/accounts/src/AccountManager.php:56` (`confirmMove()` / `isConfirmAllowedForMove()`)
 
 `isConfirmAllowedForMove()` checks partner presence, bank archival, total sign, invoice date,
@@ -72,7 +73,16 @@ every reasonable precondition **except** whether the move's lines actually balan
 A move with debit=100/credit=50 lines posts cleanly, silently putting the ledger out of balance
 by 50.
 
-### 3. Zero-balance check uses the wrong currency's rounding threshold
+**Fix note:** the balance check has to run *after* `computeAccountMove()` generates an invoice's
+tax/payable lines, not before — checking earlier rejects every ordinary bill/invoice post, since
+those balancing lines don't exist yet at precondition-check time. Adding the check (correctly
+placed) immediately caught a second, previously-undetected bug of the exact class it exists to
+prevent: registering a partial payment with "reconcile" difference handling built a write-off
+line with only `balance` set, no `debit`/`credit` — and `computeAccountMove()` silently zeroed
+that balance back out for the non-invoice payment move, posting it unbalanced. Fixed alongside
+this item.
+
+### 3. Zero-balance check uses the wrong currency's rounding threshold — FIXED
 `plugins/webkul/accounts/src/Models/Payment.php:323` (`computeState()`)
 
 `amount_residual` is always computed and rounded in the **company** currency (confirmed in
@@ -84,7 +94,7 @@ residual wrongly read as "zero" under JPY's coarser threshold, flipping the paym
 while money is still owed. The sibling method `computeReconciliationStatus()` a few lines below
 gets this right by matching the residual field to the currency; `computeState()` doesn't.
 
-### 4. A within-file duplicate transaction crashes the entire bank statement import
+### 4. A within-file duplicate transaction crashes the entire bank statement import — FIXED
 `plugins/webkul/accounting/src/Services/Bank/BankStatementImportService.php:162`
 
 The validator correctly flags a duplicate transaction as a soft, reviewable error (same tier as
@@ -143,9 +153,8 @@ them.
 
 ## Suggested fix order
 
-1. **P0 items 1–4** — silent ledger corruption and a crash that discards valid data, the most
-   damaging class.
-2. **P1 items 5–8** — wrong money matched/converted, real financial-accuracy risk.
+1. ~~**P0 items 1–4**~~ — done, commit `be61a8d`.
+2. **P1 items 5–8** — wrong money matched/converted, real financial-accuracy risk. Not started.
 
-Every fix should get the same treatment as the HR audit fixes: explain, fix, add a regression
-test, verify fail-then-pass by isolating the fix.
+Every fix gets the same treatment as the HR audit fixes: explain, fix, add a regression test,
+verify fail-then-pass by isolating the fix.
