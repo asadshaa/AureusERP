@@ -24,9 +24,18 @@ class TimesheetWorkflowService
             ->where('company_id', $timesheet->company_id)
             ->where('user_id', $timesheet->user_id)
             ->firstOrFail();
+        // Hierarchy-route approval steps (e.g. "requester manager") resolve
+        // against whoever is recorded as the ApprovalRequest's requester. A
+        // manager or HR user is allowed to submit on an employee's behalf
+        // (the check above), but if we recorded *them* as the requester,
+        // hierarchy routing would resolve against *their* manager instead of
+        // the timesheet owner's — silently leaving it unapprovable by anyone.
+        // Anchor the requester to the timesheet's own user whenever it
+        // resolves to one, regardless of who clicked submit. Same fix as
+        // LeaveApprovalService::submit().
         $approval = $this->approvals->submit(
             $timesheet,
-            $requester,
+            $employee->user ?? $requester,
             'timesheet_submission',
             null,
             [

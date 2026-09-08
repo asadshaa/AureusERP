@@ -325,6 +325,58 @@ it('routes timesheets for approval and locks an auditable final status', functio
         ->and($approved->approved_at)->not->toBeNull();
 });
 
+it('routes a timesheet submitted by a manager on an employee\'s behalf to that employee\'s manager, not the submitter\'s', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $managerUser = hrPlatformUser($company);
+    $employeeUser = hrPlatformUser($company);
+    hrPlatformGrant($managerUser, 'hr_approve_timesheets');
+    $this->actingAs($managerUser);
+    // The manager has no manager above them — reproduces the real setup
+    // (e.g. an Operations manager at the top of their own hierarchy).
+    $manager = hrPlatformEmployee($company, $managerUser, 'Standalone Timesheet Manager');
+    hrPlatformEmployee($company, $employeeUser, 'Managed Consultant', $manager);
+
+    $workflow = \Webkul\Support\Models\ApprovalWorkflow::query()->create([
+        'company_id'   => $company->id,
+        'name'         => 'Timesheet Submission Approval',
+        'request_type' => 'timesheet_submission',
+        'priority'     => 100,
+        'is_active'    => true,
+    ]);
+    $workflow->steps()->create([
+        'sequence'           => 1,
+        'name'               => 'Manager Approval',
+        'hierarchy_route'    => 'requester_manager',
+        'required_approvals' => 1,
+    ]);
+
+    $timesheet = Timesheet::query()->create([
+        'type'            => 'projects',
+        'company_id'      => $company->id,
+        'user_id'         => $employeeUser->id,
+        'date'            => '2026-08-01',
+        'name'            => 'On-behalf submission',
+        'unit_amount'     => '8.0000',
+        'is_billable'     => true,
+        'workflow_status' => 'draft',
+    ]);
+
+    // The manager submits on the employee's behalf (permitted via
+    // hr_approve_timesheets) rather than the employee submitting their own.
+    $service = app(TimesheetWorkflowService::class);
+    $service->submit($timesheet, $managerUser);
+
+    $approvalRequest = $timesheet->fresh()->approvalRequest;
+    expect($approvalRequest->requester_id)->toBe($employeeUser->id)
+        ->and(app(ApprovalEngine::class)->canAct($approvalRequest, $managerUser))->toBeTrue();
+
+    $approved = $service->approve($timesheet->fresh(), $managerUser, 'Approved on behalf submission');
+
+    expect($approved->workflow_status)->toBe('approved')
+        ->and($approved->approvalRequest->status)->toBe('approved');
+});
+
 it('routes leave through the shared approval engine with company isolation', function (): void {
     $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
     $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
