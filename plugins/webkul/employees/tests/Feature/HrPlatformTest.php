@@ -152,6 +152,40 @@ it('enforces company team and manager hierarchy and audits approved sensitive em
         ->and($request->decisions->first()->reason)->toBe('HR verified identity and compensation');
 });
 
+it('rolls back the whole approval decision when applying it to the subject fails, instead of leaving a permanently approved-but-unapplied request', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $otherCompany = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $managerUser = hrPlatformUser($company);
+    $approverUser = hrPlatformUser($company);
+    $this->actingAs($managerUser);
+    $employee = hrPlatformEmployee($company, $managerUser, 'Reassigned Employee');
+    hrPlatformWorkflow($company, $managerUser, $approverUser, 'employee_sensitive_change');
+
+    $request = app(EmployeeSensitiveChangeService::class)->submit($employee, $managerUser, [
+        'base_salary' => '150000.0000',
+    ]);
+
+    // The employee is moved to a different company after the request was
+    // submitted but before it's approved — a normal, unrelated edit via the
+    // standard Employee form. EmployeeSensitiveChangeService::applyApproved()
+    // re-scopes its lookup by the company_id captured at submission time, so
+    // this makes the apply step fail.
+    $employee->update(['company_id' => $otherCompany->id]);
+
+    expect(fn () => app(ApprovalEngine::class)->approve($request, $approverUser, 'Approved'))
+        ->toThrow(\Illuminate\Database\Eloquent\ModelNotFoundException::class);
+
+    // Before the fix, applyApproved() ran after the approval transaction had
+    // already committed — so the request would be stuck showing "approved"
+    // forever with the salary change never actually written. Now the whole
+    // decision (including the decision record and the status flip) rolls
+    // back together, leaving the request cleanly pending and retryable.
+    expect($request->fresh()->status)->toBe('pending')
+        ->and($request->fresh()->decisions)->toHaveCount(0)
+        ->and($employee->fresh()->base_salary)->not->toBe('150000.0000');
+});
+
 it('calculates attendance flags and completes self and manager performance review workflow', function (): void {
     $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
     $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
@@ -175,6 +209,15 @@ it('calculates attendance flags and completes self and manager performance revie
         ->and($attendance->late_minutes)->toBe(15)
         ->and($attendance->early_departure_minutes)->toBe(15);
 
+    // Clearing just one side of a completed pair (e.g. correcting a bad
+    // check_out) used to leave the previously-computed worked_hours/
+    // early_departure_minutes stale instead of resetting them — reproduced
+    // manually this session, and fixed the same day.
+    $attendance->update(['check_out' => null]);
+    expect((float) $attendance->fresh()->worked_hours)->toBe(0.0)
+        ->and($attendance->fresh()->early_departure_minutes)->toBe(0)
+        ->and($attendance->fresh()->late_minutes)->toBe(15); // unaffected: still derived from check_in, which wasn't cleared
+
     $cycle = PerformanceCycle::query()->create([
         'company_id' => $company->id,
         'name'       => '2026 Annual Review',
@@ -190,6 +233,67 @@ it('calculates attendance flags and completes self and manager performance revie
         ->and($review->status)->toBe('completed')
         ->and((float) $review->self_rating)->toBe(4.1)
         ->and((float) $review->manager_rating)->toBe(4.4);
+});
+
+it('escalates a performance review to HR when the employee has no valid distinct manager reviewer, and never lets an employee complete their own manager review', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $hrUser = hrPlatformUser($company);
+    hrPlatformGrant($hrUser, \Webkul\Employee\Support\HrPermissions::ManagePerformance);
+    $this->actingAs($hrUser);
+    $hrEmployee = hrPlatformEmployee($company, $hrUser, 'HR Administrator');
+
+    // Department head with nobody above them and no parent — reproduces the
+    // exact live scenario found this session: launch() used to resolve
+    // reviewer_id to the department's manager_id, which is this employee's
+    // own id, letting them "manager-approve" their own review.
+    $selfManagedDept = Department::query()->create(['company_id' => $company->id, 'name' => 'Self-Managed Dept']);
+    $deptHeadUser = hrPlatformUser($company);
+    $deptHead = hrPlatformEmployee($company, $deptHeadUser, 'Department Head', null, $selfManagedDept);
+    $selfManagedDept->update(['manager_id' => $deptHead->id]);
+
+    // No parent, and a department with no manager_id at all — reproduces the
+    // other live scenario: launch() used to write reviewer_id = null,
+    // permanently stranding the review at manager_review.
+    $orphanDept = Department::query()->create(['company_id' => $company->id, 'name' => 'Unmanaged Dept']);
+    $orphanUser = hrPlatformUser($company);
+    $orphan = hrPlatformEmployee($company, $orphanUser, 'Orphan Employee', null, $orphanDept);
+
+    $cycle = PerformanceCycle::query()->create([
+        'company_id' => $company->id,
+        'name'       => 'Escalation Test Cycle',
+        'starts_on'  => '2026-01-01',
+        'ends_on'    => '2026-12-31',
+    ]);
+    $reviews = app(PerformanceService::class)->launch($cycle, $hrUser);
+    $deptHeadReview = $reviews->firstWhere('employee_id', $deptHead->id);
+    $orphanReview = $reviews->firstWhere('employee_id', $orphan->id);
+
+    expect($deptHeadReview->reviewer_id)->toBe($hrEmployee->id)
+        ->and($orphanReview->reviewer_id)->toBe($hrEmployee->id);
+
+    // Escalated reviews complete normally once routed to HR.
+    $service = app(PerformanceService::class);
+    $deptHeadReview = $service->submitSelfReview($deptHeadReview, $deptHead, 4.0);
+    $deptHeadReview = $service->completeManagerReview($deptHeadReview, $hrEmployee, 4.2, 'Reviewed by HR — no manager above this employee');
+    expect($deptHeadReview->status)->toBe('completed');
+
+    // Belt-and-suspenders: even if a review somehow ends up with
+    // reviewer_id === employee_id (bypassing launch(), e.g. a direct DB
+    // write or a future caller), completeManagerReview() refuses it outright.
+    // Uses an employee created after launch() ran, so it isn't already
+    // enrolled in this cycle (cycle_id+employee_id is unique).
+    $lateHire = hrPlatformEmployee($company, hrPlatformUser($company), 'Late Hire', null, $selfManagedDept);
+    $selfAssigned = PerformanceReview::query()->create([
+        'company_id'  => $company->id,
+        'cycle_id'    => $cycle->id,
+        'employee_id' => $lateHire->id,
+        'reviewer_id' => $lateHire->id,
+        'status'      => 'manager_review',
+        'self_rating' => 5.0,
+    ]);
+    expect(fn () => $service->completeManagerReview($selfAssigned, $lateHire, 5.0))
+        ->toThrow(RuntimeException::class, 'not the assigned manager reviewer');
 });
 
 it('routes timesheets for approval and locks an auditable final status', function (): void {
@@ -390,6 +494,64 @@ it('sends an approved financial employee request to a balanced draft accounting 
         ->and($employeeRequest->accountingMove->accounting_source_type)->toBe('employee_request')
         ->and($service->createAccountingDraft($employeeRequest)->accounting_move_id)->toBe($originalMoveId)
         ->and(DB::table('accounts_account_moves')->where('accounting_source_type', 'employee_request')->where('accounting_source_id', $employeeRequest->id)->count())->toBe(1);
+});
+
+it('refuses to submit a financial employee request with no amount even when requires_amount is off, instead of stranding it at approved with no accounting move', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $employeeUser = hrPlatformUser($company);
+    $this->actingAs($employeeUser);
+    $employee = hrPlatformEmployee($company, $employeeUser, 'Amountless Claimant');
+    $expense = Account::factory()->create([
+        'currency_id' => $currency->id,
+        'account_type'=> AccountType::EXPENSE,
+        'is_group'    => false,
+        'deprecated'  => false,
+    ]);
+    $payable = Account::factory()->create([
+        'currency_id' => $currency->id,
+        'account_type'=> AccountType::LIABILITY_CURRENT,
+        'is_group'    => false,
+        'deprecated'  => false,
+    ]);
+    $expense->companies()->attach($company->id);
+    $payable->companies()->attach($company->id);
+    $journal = Journal::factory()->create([
+        'company_id'  => $company->id,
+        'currency_id' => $currency->id,
+        'type'        => JournalType::GENERAL,
+        'code'        => 'HR-AMOUNTLESS-'.$company->id,
+    ]);
+    // is_financial and requires_amount are independent toggles — this
+    // reproduces the exact misconfiguration the bug depends on: a type that
+    // posts to Accounting without also marking the amount required.
+    $type = EmployeeRequestType::query()->create([
+        'company_id'           => $company->id,
+        'journal_id'           => $journal->id,
+        'debit_account_id'     => $expense->id,
+        'credit_account_id'    => $payable->id,
+        'code'                 => 'MISCONFIGURED-CLAIM',
+        'name'                 => 'Misconfigured Claim',
+        'category'             => 'reimbursement',
+        'approval_request_type'=> 'employee_expense_claim',
+        'is_financial'         => true,
+        'requires_amount'      => false,
+        'is_active'            => true,
+    ]);
+    $employeeRequest = EmployeeRequest::query()->create([
+        'company_id'      => $company->id,
+        'employee_id'     => $employee->id,
+        'request_type_id' => $type->id,
+        'requested_by'    => $employeeUser->id,
+        'currency_id'     => $currency->id,
+        'title'           => 'Reimbursement with no amount',
+    ]);
+
+    $service = app(EmployeeRequestService::class);
+    expect(fn () => $service->submit($employeeRequest, $employeeUser))
+        ->toThrow(RuntimeException::class, 'positive amount');
+
+    expect($employeeRequest->fresh()->status)->toBe('draft');
 });
 
 it('converts a sourced applicant to one company employee without duplicate re-entry and reports HR analytics', function (): void {

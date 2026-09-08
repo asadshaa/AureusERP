@@ -28,7 +28,15 @@ class EmployeeRequestService
         $request->loadMissing(['employee', 'requestType', 'company']);
         $this->assertRequestIntegrity($request, $requester);
 
-        if ($request->requestType->requires_amount && BigDecimal::of((string) ($request->amount ?? 0))->isLessThanOrEqualTo(0)) {
+        // is_financial and requires_amount are independent toggles on the request
+        // type — an admin can create a type that posts to Accounting
+        // (is_financial) without also marking the amount required, which would
+        // otherwise let a request with no amount reach approval and only fail
+        // once createAccountingDraft() runs. Require a positive amount for
+        // either flag so a financial request can never be submitted amountless
+        // in the first place.
+        if (($request->requestType->requires_amount || $request->requestType->is_financial)
+            && BigDecimal::of((string) ($request->amount ?? 0))->isLessThanOrEqualTo(0)) {
             throw new RuntimeException('This employee request type requires a positive amount.');
         }
         if ($request->requestType->requires_document && empty($request->attachments)) {

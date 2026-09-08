@@ -75,14 +75,28 @@ class AttendanceRecord extends Model
         });
 
         static::saving(function (self $record): void {
+            // Each of these previously only reassigned the field when BOTH sides
+            // of its pair were present, with no else branch — so clearing just
+            // one side on an edit (e.g. correcting a bad check_out) left the
+            // stale value from the last time both were set, silently persisted
+            // as if it still applied. Reset to the column's own default (0,
+            // matching the migration — these are non-nullable unsigned columns)
+            // whenever the pair is incomplete, so an edited-down record can't
+            // keep claiming hours/lateness/early-departure it no longer has.
             if ($record->check_in && $record->check_out) {
                 $record->worked_hours = max(0, $record->check_in->diffInMinutes($record->check_out) / 60);
+            } else {
+                $record->worked_hours = 0;
             }
             if ($record->scheduled_start && $record->check_in) {
                 $record->late_minutes = max(0, $record->scheduled_start->diffInMinutes($record->check_in, false));
+            } else {
+                $record->late_minutes = 0;
             }
             if ($record->scheduled_end && $record->check_out) {
                 $record->early_departure_minutes = max(0, $record->check_out->diffInMinutes($record->scheduled_end, false));
+            } else {
+                $record->early_departure_minutes = 0;
             }
         });
     }

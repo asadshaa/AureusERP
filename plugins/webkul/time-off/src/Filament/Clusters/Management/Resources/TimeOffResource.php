@@ -217,6 +217,14 @@ class TimeOffResource extends Resource
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make()
+                        // Filament's default bulk-delete authorization only checks the
+                        // blanket "deleteAny" ability once for the whole action — it
+                        // never re-checks each selected record. Without this, someone
+                        // holding only the generic delete-any permission could bulk-
+                        // delete an approved (VALIDATE_TWO) leave through the toolbar,
+                        // even though the row-level Delete button and LeavePolicy::
+                        // delete() both correctly forbid deleting one one at a time.
+                        ->authorizeIndividualRecords('delete')
                         ->successNotification(
                             Notification::make()
                                 ->success()
