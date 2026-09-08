@@ -7,12 +7,22 @@ in this exact codebase (the outstanding-account company preference, the non-exis
 two shared `ApprovalEngine` bugs from the HR audit). Every candidate was then independently
 re-read by two adversarial reviewers instructed to refute it.
 
-**Result:** 14 candidates found → 14 confirmed → 0 refuted. **4 of those turned out to be
-duplicates** of bugs already fixed in an earlier accounting session (commit `dc792ba`) that had
-never been merged into `master` — the branch this audit ran against was missing that whole
-commit. Once cherry-picked in and re-checked against the corrected file state, those 4 were
-confirmed already resolved and dropped. **10 distinct, new, confirmed bugs remain**, none fixed
-yet.
+**Result:** 14 candidates found → 14 confirmed by the audit's own two-verifier process. A second,
+manual re-verification pass against the current branch state (done after the `dc792ba`
+cherry-pick, in response to the reasonable question "didn't we already fix some of these?")
+found the audit's own process had let 6 of the 14 through incorrectly:
+
+- **5 were duplicates** of bugs already fixed in an earlier accounting session (commit `dc792ba`)
+  that had never been merged into `master` — the branch this audit ran against was missing that
+  whole commit. One of the five (the CoA-import reconcile flag) was missed in the first triage
+  pass and only caught on this closer re-check.
+- **1 was a false positive that both adversarial verifiers missed** — the "duplicate GL code
+  race" finding claimed no lock existed between the uniqueness check and the insert, but the
+  actual code wraps both inside `Cache::lock(...)->block(...)`, which does serialize concurrent
+  calls. Both verifier agents asserted the lock didn't exist despite it being in the file they
+  reviewed. This is flagged here as a process failure, not swept under the rug.
+
+**8 distinct, new, confirmed bugs remain**, none fixed yet.
 
 ---
 
@@ -22,8 +32,20 @@ yet.
 - `InvoiceResource` / `BillResource` missing company scoping entirely
 - `PaymentResource` missing company scoping entirely
 - `JournalEntryResource` scoped only by ownership, never by company
+- Chart-of-Accounts import not setting `reconcile` on receivable/payable accounts
+  (`CoaImportService.php` already sets `'reconcile' => $type->isReconcilable()` at both create and
+  update sites)
 
-All four are confirmed fixed on this branch as of commit `52b5d44`.
+All five are confirmed fixed on this branch as of commit `52b5d44`.
+
+## Refuted (confirmed by both adversarial verifiers, but wrong on closer manual re-check)
+
+- **"Two accounts with the same code can be created for the same company"**
+  (`CanonicalAccountCreationService.php`) — the claim was that the uniqueness check and the
+  insert race with no lock between them. In fact both the check
+  (`companyAccountCodeExists()`) and the insert happen inside
+  `Cache::lock("accounting-account-code:{company_id}", 10)->block(5, ...)`, which does serialize
+  concurrent calls for the same company. Not a bug.
 
 ---
 
@@ -119,37 +141,11 @@ them.
 
 ---
 
-## P2 — Data integrity
-
-### 9. Chart-of-Accounts import never marks receivable/payable accounts as reconcilable
-`plugins/webkul/accounting/src/Services/Coa/CoaImportService.php:196`
-
-Accounts created (or updated) during a CoA import never set the `reconcile` column — it's
-nullable with no default, so it stays `false`. `MoveLine::computeAmountResidual()` only tracks a
-balance when `reconcile` is true (or the account type is cash/credit-card). A receivable account
-imported from a spreadsheet therefore has every invoice against it immediately read as
-`amount_residual = 0` — a genuinely unpaid invoice looks fully settled from the moment it's
-posted.
-
-### 10. Two accounts with the same code can be created for the same company
-`plugins/webkul/accounting/src/Services/Account/CanonicalAccountCreationService.php:186`
-
-GL-code uniqueness is enforced only by a check-then-insert in application code
-(`companyAccountCodeExists()` runs before the transaction opens; the actual insert happens
-inside it) — there is no unique database constraint on `accounts_accounts.code`, company-scoped
-or otherwise, anywhere in the migration history, even though this exact pattern
-(`table_company_code_unique`) is used for several sibling tables. Two near-simultaneous requests
-with the same code both pass the check before either commits.
-
----
-
 ## Suggested fix order
 
 1. **P0 items 1–4** — silent ledger corruption and a crash that discards valid data, the most
    damaging class.
 2. **P1 items 5–8** — wrong money matched/converted, real financial-accuracy risk.
-3. **P2 items 9–10** — data-integrity gaps, lower immediate blast radius but compounding over
-   time.
 
 Every fix should get the same treatment as the HR audit fixes: explain, fix, add a regression
 test, verify fail-then-pass by isolating the fix.
