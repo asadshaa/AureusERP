@@ -57,15 +57,30 @@ class AccountManager
     {
         $this->isConfirmAllowedForMove($record);
 
+        $wasPostedBefore = $record->posted_before;
+
         $record->state = MoveState::POSTED;
 
         $record->posted_before = true;
 
         $record->save();
 
+        // Invoice-type moves don't have their balancing tax/payable/receivable
+        // lines yet at this point — computeAccountMove() (via syncDynamicLines())
+        // is what generates them. So the balance check has to run after this
+        // call, not before it, or every fresh invoice would look "unbalanced"
+        // and get rejected before the system ever gets to balance it.
         $record = $this->computeAccountMove($record);
 
         $record->refresh();
+
+        $totalBalance = $record->lines->sum(fn ($line) => (float) $line->balance);
+
+        if (! float_is_zero($totalBalance, precisionRounding: $record->currency->rounding)) {
+            $record->update(['state' => MoveState::DRAFT, 'posted_before' => $wasPostedBefore]);
+
+            throw new Exception(__('accounts::account-manager.post-action-validate.unbalanced-entry'));
+        }
 
         foreach ($record->lines as $line) {
             $line->update(['parent_state' => MoveState::POSTED]);
@@ -939,18 +954,30 @@ class AccountManager
                     ? $paymentRegister->payment_difference
                     : -$paymentRegister->payment_difference;
 
+                $writeOffBalance = $paymentRegister->currency->convert(
+                    $writeOffAmountCurrency,
+                    $paymentRegister->company->currency,
+                    $paymentRegister->company,
+                    $paymentRegister->payment_date
+                );
+
                 $paymentVals['write_off_line_vals'][] = [
                     'name'            => 'Write Off',
                     'account_id'      => $paymentRegister->writeoff_account_id,
                     'partner_id'      => $paymentRegister->partner_id,
                     'currency_id'     => $paymentRegister->currency_id,
                     'amount_currency' => $writeOffAmountCurrency,
-                    'balance'         => $paymentRegister->currency->convert(
-                        $writeOffAmountCurrency,
-                        $paymentRegister->company->currency,
-                        $paymentRegister->company,
-                        $paymentRegister->payment_date
-                    ),
+                    'balance'         => $writeOffBalance,
+                    // computeAccountMove() -> computeMoveLineTotals() runs
+                    // computeBalance() on every PRODUCT-classified line of the
+                    // move (which this line becomes, absent an explicit
+                    // display_type, same as the liquidity/counterpart lines
+                    // above) and for a non-invoice move that recomputes
+                    // balance as debit - credit. Without these set, that
+                    // recompute silently zeroes out the write-off amount and
+                    // posts an unbalanced entry.
+                    'debit'           => $writeOffBalance > 0.0 ? $writeOffBalance : 0.0,
+                    'credit'          => $writeOffBalance < 0.0 ? -$writeOffBalance : 0.0,
                 ];
             }
         }
@@ -2016,10 +2043,13 @@ class AccountManager
         foreach ($reverseMoves as $reverseMove) {
             foreach ($reverseMove->lines as $line) {
                 if ($reverseMove->move_type === MoveType::ENTRY || $line->display_type === DisplayType::COGS) {
-                    $line->update([
-                        'balance'         => -$line->balance,
-                        'amount_currency' => -$line->amount_currency,
-                    ]);
+                    $line->balance = -$line->balance;
+                    $line->amount_currency = -$line->amount_currency;
+                    // balance flipped sign above; debit/credit must be recomputed from
+                    // it or the reversal line keeps the original entry's debit/credit
+                    // values and reads as a duplicate instead of a cancellation.
+                    $line->computeCreditAndDebit();
+                    $line->save();
                 }
             }
         }

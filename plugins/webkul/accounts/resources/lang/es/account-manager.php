@@ -12,6 +12,7 @@ return [
         'lines-required'       => 'Agregue al menos una línea a la factura.',
         'draft-state-required' => 'Solo se pueden confirmar las facturas en estado borrador.',
         'journal-archived'     => 'No se puede confirmar una factura con un diario archivado.',
+        'unbalanced-entry'     => 'Este asiento no está balanceado: el débito total debe ser igual al crédito total antes de poder registrarlo.',
     ],
 
     'documents' => [

@@ -159,9 +159,26 @@ class BankStatementImportService
                 }
             }
 
+            $seenFingerprints = [];
+
             foreach ($normalized->transactions as $sort => $transaction) {
                 $conversion = $conversions['transactions'][$sort];
                 $fingerprint = $transaction->fingerprint($normalized->bankAccountNumber);
+
+                // The validator already flagged a within-file duplicate as a soft,
+                // reviewable error (see $errors above) so the statement can still
+                // import, tagged ReconciliationFailed. But `bank_statement_lines`
+                // has a hard unique constraint on (statement_id,
+                // transaction_fingerprint), so inserting the second occurrence of
+                // the same fingerprint would throw and roll back everything
+                // imported so far. Skip creating a line for it — the duplicate is
+                // still visible to the user via the statement's validation_errors.
+                if (isset($seenFingerprints[$fingerprint])) {
+                    continue;
+                }
+
+                $seenFingerprints[$fingerprint] = true;
+
                 $originalSignedAmount = BigDecimal::of($transaction->credit)->minus($transaction->debit)->__toString();
                 $line = BankStatementLine::query()->create([
                     'sort'                    => $sort,
