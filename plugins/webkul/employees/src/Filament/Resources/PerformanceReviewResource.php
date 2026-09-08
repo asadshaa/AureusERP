@@ -83,18 +83,32 @@ class PerformanceReviewResource extends Resource
      * and is intentionally left company-scoped only; it is administrative
      * configuration, not an individual's data — PerformanceCycleResource
      * is unchanged.
+     *
+     * A review is also visible if the viewer is its assigned reviewer_id,
+     * even when the reviewed employee falls outside their normal HR
+     * hierarchy — otherwise a review escalated to an HR user with no
+     * hierarchy relationship to the employee (PerformanceService::launch(),
+     * when nobody in the employee's own chain is a valid distinct
+     * reviewer) would be permanently unreachable through this list: the
+     * fix that assigns the reviewer would leave them unable to ever see
+     * or act on it.
      */
     public static function getEloquentQuery(): Builder
     {
         $user = Auth::user();
         $companyId = (int) $user?->default_company_id;
+        $visibleEmployeeIds = $user ? app(HrHierarchyService::class)->visibleEmployeeIds($user, $companyId) : collect();
+        $ownEmployeeId = $user?->employee?->id;
 
         return parent::getEloquentQuery()
             ->where('company_id', $companyId)
-            ->whereIn(
-                'employee_id',
-                $user ? app(HrHierarchyService::class)->visibleEmployeeIds($user, $companyId) : [],
-            );
+            ->where(function (Builder $query) use ($visibleEmployeeIds, $ownEmployeeId): void {
+                $query->whereIn('employee_id', $visibleEmployeeIds);
+
+                if ($ownEmployeeId) {
+                    $query->orWhere('reviewer_id', $ownEmployeeId);
+                }
+            });
     }
 
     public static function canViewAny(): bool

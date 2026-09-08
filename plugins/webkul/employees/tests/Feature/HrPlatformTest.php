@@ -987,12 +987,22 @@ it('scopes the allocation, employee-skill, attendance, performance-review and ti
         'cycle_id'   => $cycle->id,
         'employee_id'=> $employee->id,
     ]);
-    PerformanceReview::query()->create([
+    $colleagueReview = PerformanceReview::query()->create([
         'company_id' => $company->id,
         'cycle_id'   => $cycle->id,
         'employee_id'=> $unrelatedEmployee->id,
     ]);
     expect(PerformanceReviewResource::getEloquentQuery()->pluck('id')->all())->toBe([$visibleReview->id]);
+
+    // If this same review is later escalated to this manager as reviewer_id
+    // — via PerformanceService::launch()'s HR fallback, reproduced live
+    // this session — it must become reachable, even though the reviewed
+    // employee ($unrelatedEmployee) stays outside the manager's own HR
+    // hierarchy. Without this, the escalation fix assigns a reviewer who
+    // can never see or act on the review.
+    $colleagueReview->update(['reviewer_id' => $manager->id]);
+    expect(PerformanceReviewResource::getEloquentQuery()->pluck('id')->sort()->values()->all())
+        ->toBe([$visibleReview->id, $colleagueReview->id]);
 
     // TimesheetResource: keyed by user_id, not employee_id — exercises the
     // Employee -> user_id bridge added on HrHierarchyService.
