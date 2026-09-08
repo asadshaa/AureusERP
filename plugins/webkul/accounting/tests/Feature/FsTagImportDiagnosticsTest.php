@@ -1,13 +1,17 @@
 <?php
 
+use Livewire\Livewire;
+use Spatie\Permission\Models\Permission;
 use Webkul\Account\Enums\AccountType;
 use Webkul\Account\Enums\JournalType;
 use Webkul\Account\Models\Account;
 use Webkul\Account\Models\BankStatementLine;
 use Webkul\Account\Models\Journal;
+use Webkul\Accounting\Filament\Clusters\Accounting\Resources\BankTransactionMappingResource\Pages\ListBankTransactionMappings;
 use Webkul\Accounting\Models\FsTag;
 use Webkul\Accounting\Services\Bank\BankStatementImportService;
 use Webkul\Accounting\Services\FsTagService;
+use Webkul\Security\Enums\PermissionType;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\Company;
 use Webkul\Support\Models\Currency;
@@ -152,4 +156,39 @@ it('gives a distinct, plain-language reason for each way an FS Tag code can fail
         ->and($service->diagnose($companyA->id, 'FS-OTHERCO'))->toContain('belongs to a different company')
         ->and($service->diagnose($companyA->id, 'FS-RETIRED'))->toContain('retired')
         ->and($service->diagnose($companyA->id, ''))->toBeNull();
+});
+
+it('shows the unrecognized code in the Bank Transaction Mapping grid instead of a blank cell', function () {
+    $fixture = fsTagImportFixture();
+
+    Permission::query()->firstOrCreate(['name' => 'view_any_accounting_bank_transaction_mapping', 'guard_name' => 'web']);
+    $role = \Webkul\Security\Models\Role::query()->firstOrCreate(['name' => 'FsTagGridTestRole', 'guard_name' => 'web']);
+    $role->syncPermissions(Permission::query()->where('guard_name', 'web')->get());
+    $fixture['user']->assignRole($role);
+    $fixture['user']->forceFill(['resource_permission' => PermissionType::GLOBAL->value])->save();
+    app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
+
+    \Filament\Facades\Filament::setCurrentPanel(\Filament\Facades\Filament::getPanel('admin'));
+    \Filament\Facades\Filament::bootCurrentPanel();
+
+    $statement = app(BankStatementImportService::class)->import(
+        fsTagStatementCsv('FS Tag'),
+        $fixture['company'],
+        $fixture['journal'],
+        $fixture['bank'],
+        $fixture['currency'],
+        'hbl',
+    );
+
+    $lines = BankStatementLine::query()->where('statement_id', $statement->id)->orderBy('sort')->with('mapping')->get();
+    $recognizedMapping = $lines[0]->mapping;
+    $unrecognizedMapping = $lines[1]->mapping;
+
+    Livewire::test(ListBankTransactionMappings::class)
+        // A resolved tag still just shows its own code, unchanged.
+        ->assertTableColumnFormattedStateSet('fsTag.code', 'FS-BANK-FEE', $recognizedMapping)
+        // An unresolved one shows the raw code the user typed, marked
+        // unrecognized -- not a blank cell indistinguishable from a
+        // transaction that was never tagged at all.
+        ->assertTableColumnFormattedStateSet('fsTag.code', 'FS-DOES-NOT-EXIST (unrecognized)', $unrecognizedMapping);
 });
