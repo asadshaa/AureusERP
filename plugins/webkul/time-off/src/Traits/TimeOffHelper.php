@@ -34,7 +34,7 @@ trait TimeOffHelper
 
         $this->handleLeaveOverlap($data, $excludeRecordId, $action);
 
-        $this->handleLeaveAllocation($data, $action);
+        $this->handleLeaveAllocation($data, $excludeRecordId, $action);
 
         $data['state'] = State::CONFIRM->value;
         $data['date_from'] = $data['request_date_from'] ?? null;
@@ -278,7 +278,7 @@ trait TimeOffHelper
         }
     }
 
-    private function handleLeaveAllocation(array &$data, ?Action $action = null): void
+    private function handleLeaveAllocation(array &$data, ?int $excludeRecordId = null, ?Action $action = null): void
     {
         $employee = Employee::find($data['employee_id'] ?? null);
 
@@ -310,10 +310,17 @@ trait TimeOffHelper
             })
             ->sum('number_of_days');
 
+        // Editing an existing (non-refused) leave without excluding its own
+        // row here double-counts its pre-edit day count against itself: the
+        // overlap check two lines up (handleLeaveOverlap) already excludes
+        // $excludeRecordId, but this sum previously didn't, so increasing
+        // the day count on an edit was compared against an
+        // artificially-shrunk balance and could be wrongly rejected even
+        // when the true post-edit total usage stayed within the allocation.
         $totalTaken = Leave::where('employee_id', $employee->id)
             ->where('holiday_status_id', $leaveTypeId)
             ->where('state', '!=', State::REFUSE->value)
-            ->where(fn ($q) => true)
+            ->when($excludeRecordId, fn (Builder $query) => $query->where('id', '!=', $excludeRecordId))
             ->sum('number_of_days');
 
         $availableBalance = round($totalAllocated - $totalTaken, 1);

@@ -35,6 +35,15 @@ class ApplicantIntakeService
             'portfolio_url'            => ['nullable', 'url', 'max:2048'],
         ])->validate();
 
+        // The candidate-dedup lookup below matches on this exact string, and
+        // email_from carries no unique DB constraint — a byte-different but
+        // logically identical address (different casing, incidental
+        // whitespace from an upstream ATS/webhook) previously fell through
+        // to creating a second Candidate (and a second Partner contact) for
+        // the same real person. Normalize once, up front, so both the
+        // lookup and everything stored below use the same canonical form.
+        $data['candidate_email'] = trim(mb_strtolower($data['candidate_email']));
+
         $companyId = (int) ($data['company_id'] ?? $actor->default_company_id);
         if (
             (int) $actor->default_company_id !== $companyId

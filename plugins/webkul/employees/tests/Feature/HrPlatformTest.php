@@ -152,6 +152,45 @@ it('enforces company team and manager hierarchy and audits approved sensitive em
         ->and($request->decisions->first()->reason)->toBe('HR verified identity and compensation');
 });
 
+it('routes a sensitive-change request to the affected employee\'s manager, not the requesting HR admin\'s', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $hrAdminUser = hrPlatformUser($company);
+    $this->actingAs($hrAdminUser);
+    // The HR admin requesting the change has no Employee record at all — a
+    // normal setup for a pure HR/admin account, and exactly the case that
+    // breaks hierarchy routing if the admin gets recorded as the requester.
+    $manager = hrPlatformEmployee($company, hrPlatformUser($company), 'Affected Employee Manager');
+    $affectedEmployeeUser = hrPlatformUser($company);
+    $employee = hrPlatformEmployee($company, $affectedEmployeeUser, 'Affected Employee', $manager);
+
+    $workflow = \Webkul\Support\Models\ApprovalWorkflow::query()->create([
+        'company_id'   => $company->id,
+        'name'         => 'Sensitive Change Approval',
+        'request_type' => 'employee_sensitive_change',
+        'priority'     => 100,
+        'is_active'    => true,
+    ]);
+    $workflow->steps()->create([
+        'sequence'           => 1,
+        'name'               => 'Manager Approval',
+        'hierarchy_route'    => 'requester_manager',
+        'required_approvals' => 1,
+    ]);
+
+    $request = app(EmployeeSensitiveChangeService::class)->submit($employee, $hrAdminUser, [
+        'base_salary' => '140000.0000',
+    ]);
+
+    expect($request->requester_id)->toBe($affectedEmployeeUser->id)
+        ->and(app(ApprovalEngine::class)->canAct($request, $manager->user))->toBeTrue();
+
+    $approved = app(ApprovalEngine::class)->approve($request, $manager->user, 'Approved by the employee\'s actual manager');
+    $updated = app(EmployeeSensitiveChangeService::class)->applyApproved($approved);
+
+    expect($updated->base_salary)->toBe('140000.0000');
+});
+
 it('rolls back the whole approval decision when applying it to the subject fails, instead of leaving a permanently approved-but-unapplied request', function (): void {
     $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
     $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
@@ -483,6 +522,142 @@ it('routes a leave submitted by a manager on an employee\'s behalf to that emplo
         ->and($approved->approvalRequest->status)->toBe('approved');
 });
 
+it('re-checks the allocation balance when resubmitting a refused leave, instead of letting it be approved against a balance it no longer has', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $employeeUser = hrPlatformUser($company);
+    $managerUser = hrPlatformUser($company);
+    $this->actingAs($employeeUser);
+    $manager = hrPlatformEmployee($company, $managerUser, 'Balance Check Manager');
+    $employee = hrPlatformEmployee($company, $employeeUser, 'Balance Check Employee', $manager);
+    // A real workflow exists so a failure here can only be the balance
+    // check itself, not an incidental "no workflow configured" error.
+    hrPlatformWorkflow($company, $employeeUser, $managerUser, 'leave_request');
+    $leaveType = LeaveType::query()->create([
+        'company_id'          => $company->id,
+        'name'                => 'Balance Check Leave',
+        'is_active'           => true,
+        'requires_allocation' => \Webkul\TimeOff\Enums\RequiresAllocation::YES->value,
+    ]);
+    LeaveAllocation::query()->create([
+        'employee_company_id' => $company->id,
+        'employee_id'         => $employee->id,
+        'holiday_status_id'   => $leaveType->id,
+        'name'                => '5-day allocation',
+        'state'               => LeaveState::VALIDATE_TWO,
+        'allocation_type'     => 'regular',
+        'number_of_days'      => 5,
+    ]);
+    // 3 of the 5 allocated days are already consumed by an unrelated,
+    // already-approved leave.
+    Leave::query()->create([
+        'company_id'          => $company->id,
+        'employee_company_id' => $company->id,
+        'employee_id'         => $employee->id,
+        'user_id'             => $employeeUser->id,
+        'holiday_status_id'   => $leaveType->id,
+        'date_from'           => '2026-06-01',
+        'date_to'             => '2026-06-03',
+        'number_of_days'      => 3,
+        'state'               => LeaveState::VALIDATE_TWO,
+    ]);
+    // A 5-day request that was refused — at refusal time the full 5-day
+    // balance was still available, but it no longer is by the time this
+    // gets resubmitted.
+    $refusedLeave = Leave::query()->create([
+        'company_id'          => $company->id,
+        'employee_company_id' => $company->id,
+        'employee_id'         => $employee->id,
+        'user_id'             => $employeeUser->id,
+        'holiday_status_id'   => $leaveType->id,
+        'date_from'           => '2026-08-01',
+        'date_to'             => '2026-08-05',
+        'number_of_days'      => 5,
+        'state'               => LeaveState::REFUSE,
+    ]);
+
+    expect(fn () => app(LeaveApprovalService::class)->submit($refusedLeave, $employeeUser))
+        ->toThrow(RuntimeException::class, 'Insufficient balance');
+
+    expect($refusedLeave->fresh()->state)->toBe(LeaveState::REFUSE)
+        ->and($refusedLeave->fresh()->approvalRequest)->toBeNull();
+});
+
+it('excludes a leave being edited from its own balance check, instead of double-counting its stale pre-edit value against itself', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $employeeUser = hrPlatformUser($company);
+    $this->actingAs($employeeUser);
+    $employee = hrPlatformEmployee($company, $employeeUser, 'Edit Balance Employee');
+    $leaveType = LeaveType::query()->create([
+        'company_id'          => $company->id,
+        'name'                => 'Edit Balance Leave',
+        'is_active'           => true,
+        'requires_allocation' => \Webkul\TimeOff\Enums\RequiresAllocation::YES->value,
+    ]);
+    LeaveAllocation::query()->create([
+        'employee_company_id' => $company->id,
+        'employee_id'         => $employee->id,
+        'holiday_status_id'   => $leaveType->id,
+        'name'                => '10-day allocation',
+        'state'               => LeaveState::VALIDATE_TWO,
+        'allocation_type'     => 'regular',
+        'number_of_days'      => 10,
+    ]);
+    // An unrelated, already-approved leave consumes 5 of the 10 days
+    // (2026-06-08 to 2026-06-12, Mon-Fri = 5 business days).
+    Leave::query()->create([
+        'company_id'          => $company->id,
+        'employee_company_id' => $company->id,
+        'employee_id'         => $employee->id,
+        'user_id'             => $employeeUser->id,
+        'holiday_status_id'   => $leaveType->id,
+        'date_from'           => '2026-06-08',
+        'date_to'             => '2026-06-12',
+        'number_of_days'      => 5,
+        'state'               => LeaveState::CONFIRM,
+    ]);
+    // The leave being edited: originally 2 business days
+    // (2026-06-15 to 2026-06-16, Mon-Tue).
+    $editedLeave = Leave::query()->create([
+        'company_id'          => $company->id,
+        'employee_company_id' => $company->id,
+        'employee_id'         => $employee->id,
+        'user_id'             => $employeeUser->id,
+        'holiday_status_id'   => $leaveType->id,
+        'date_from'           => '2026-06-15',
+        'date_to'             => '2026-06-16',
+        'number_of_days'      => 2,
+        'state'               => LeaveState::CONFIRM,
+    ]);
+
+    // Editing it up to 4 business days (2026-07-06 to 2026-07-09, Mon-Thu):
+    // post-edit total usage is 5 (unrelated) + 4 (this) = 9, within the
+    // 10-day allocation — a valid edit. Without excluding this record's own
+    // stale 2-day value from the balance check, totalTaken would come out
+    // as 5 + 2 = 7, available = 3, and 4 > 3 would wrongly block it.
+    $harness = new class
+    {
+        use \Webkul\TimeOff\Traits\TimeOffHelper;
+
+        public bool $halted = false;
+
+        public function halt(): void
+        {
+            $this->halted = true;
+        }
+    };
+    $data = $harness->mutateTimeOffData([
+        'employee_id'        => $employee->id,
+        'holiday_status_id'  => $leaveType->id,
+        'request_date_from'  => '2026-07-06',
+        'request_date_to'    => '2026-07-09',
+    ], $editedLeave->id);
+
+    expect($harness->halted)->toBeFalse()
+        ->and($data['number_of_days'])->toBe(4);
+});
+
 it('sends an approved financial employee request to a balanced draft accounting journal exactly once', function (): void {
     $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
     $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
@@ -546,6 +721,66 @@ it('sends an approved financial employee request to a balanced draft accounting 
         ->and($employeeRequest->accountingMove->accounting_source_type)->toBe('employee_request')
         ->and($service->createAccountingDraft($employeeRequest)->accounting_move_id)->toBe($originalMoveId)
         ->and(DB::table('accounts_account_moves')->where('accounting_source_type', 'employee_request')->where('accounting_source_id', $employeeRequest->id)->count())->toBe(1);
+});
+
+it('routes an employee request submitted by a manager on an employee\'s behalf to that employee\'s manager, not the submitter\'s', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $managerUser = hrPlatformUser($company);
+    $employeeUser = hrPlatformUser($company);
+    $this->actingAs($managerUser);
+    // The manager has no manager above them — reproduces the real setup
+    // (e.g. a standalone department head).
+    $manager = hrPlatformEmployee($company, $managerUser, 'Standalone Request Manager');
+    $employee = hrPlatformEmployee($company, $employeeUser, 'Managed Requester', $manager);
+
+    $type = EmployeeRequestType::query()->create([
+        'company_id'            => $company->id,
+        'code'                  => 'GENERIC-REQUEST',
+        'name'                  => 'Generic Request',
+        'category'              => 'other',
+        'approval_request_type' => 'employee_request',
+        'is_financial'          => false,
+        'requires_amount'       => false,
+        'is_active'             => true,
+    ]);
+
+    $workflow = \Webkul\Support\Models\ApprovalWorkflow::query()->create([
+        'company_id'   => $company->id,
+        'name'         => 'Employee Request Approval',
+        'request_type' => 'employee_request',
+        'priority'     => 100,
+        'is_active'    => true,
+    ]);
+    $workflow->steps()->create([
+        'sequence'           => 1,
+        'name'               => 'Manager Approval',
+        'hierarchy_route'    => 'requester_manager',
+        'required_approvals' => 1,
+    ]);
+
+    $employeeRequest = EmployeeRequest::query()->create([
+        'company_id'      => $company->id,
+        'employee_id'     => $employee->id,
+        'request_type_id' => $type->id,
+        'requested_by'    => $managerUser->id,
+        'currency_id'     => $currency->id,
+        'title'           => 'On-behalf request',
+    ]);
+
+    // The manager submits on the managed employee's behalf rather than the
+    // employee submitting their own.
+    $service = app(EmployeeRequestService::class);
+    $service->submit($employeeRequest, $managerUser);
+
+    $approvalRequest = $employeeRequest->fresh()->approvalRequest;
+    expect($approvalRequest->requester_id)->toBe($employeeUser->id)
+        ->and(app(ApprovalEngine::class)->canAct($approvalRequest, $managerUser))->toBeTrue();
+
+    $approved = $service->approve($employeeRequest->fresh(), $managerUser, 'Approved on behalf submission');
+
+    expect($approved->status)->toBe('approved')
+        ->and($approved->approvalRequest->status)->toBe('approved');
 });
 
 it('refuses to submit a financial employee request with no amount even when requires_amount is off, instead of stranding it at approved with no accounting move', function (): void {
@@ -814,6 +1049,40 @@ it('normalizes idempotent manual and API applicant intake without crossing compa
         'candidate_email'          => 'outside@example.test',
         'job_id'                   => $otherJob->id,
     ], $user))->toThrow(RuntimeException::class);
+});
+
+it('stores candidate emails in a normalized (trimmed, lowercased) form, rather than depending on the database collation for case-insensitive matching', function (): void {
+    // Note: email_from's column collation (utf8mb4_unicode_ci) already
+    // makes MySQL's own `where('email_from', ...)` comparison
+    // case-insensitive, so a same-email-different-casing re-import never
+    // actually produced a duplicate Candidate on this database — the
+    // original concern (no normalization anywhere in the code) turned out
+    // to be masked by that collation setting, not a live, reproducible bug.
+    // This test instead pins down what the fix genuinely changes: the
+    // value stored in email_from is now explicit and canonical, rather
+    // than silently correct only because of a collation nobody chose for
+    // this purpose (and which a different DB engine, or a case-sensitive
+    // collation, would not provide).
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $user = hrPlatformUser($company);
+    $this->actingAs($user);
+    $job = EmployeeJobPosition::query()->create([
+        'company_id' => $company->id,
+        'name'       => 'Casing Test Role',
+        'is_active'  => true,
+    ]);
+
+    $application = app(ApplicantIntakeService::class)->import('api', [
+        'company_id'     => $company->id,
+        'application_id' => 'ATS-2001',
+        'name'           => 'Jane Doe',
+        'email'          => 'Jane.Doe@Example.Test',
+        'job_id'         => $job->id,
+        'source'         => 'Configured ATS',
+    ], $user);
+
+    expect($application->candidate->email_from)->toBe('jane.doe@example.test');
 });
 
 it('scopes recruitment and leave resources to the active company and current employee', function (): void {

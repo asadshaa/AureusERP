@@ -43,9 +43,18 @@ class EmployeeRequestService
             throw new RuntimeException('This employee request type requires a supporting document.');
         }
 
+        // Hierarchy-route approval steps (e.g. "requester manager") resolve
+        // against whoever is recorded as the ApprovalRequest's requester. A
+        // manager/HR user is allowed to submit on a managed employee's
+        // behalf (the integrity check above), but if we recorded *them* as
+        // the requester, hierarchy routing would resolve against *their*
+        // manager instead of the request's own employee — silently leaving
+        // it unapprovable by anyone. Anchor to the request's own employee
+        // whenever they have a linked user account. Same fix as
+        // LeaveApprovalService::submit() / TimesheetWorkflowService::submit().
         $approval = $this->approvals->submit(
             $request,
-            $requester,
+            $request->employee->user ?? $requester,
             $request->requestType->approval_request_type,
             $request->amount !== null ? (string) $request->amount : null,
             [

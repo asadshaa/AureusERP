@@ -2,12 +2,15 @@
 
 namespace Webkul\TimeOff\Services;
 
+use Illuminate\Support\Carbon;
 use RuntimeException;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\ApprovalRequest;
 use Webkul\Support\Services\ApprovalEngine;
 use Webkul\TimeOff\Enums\State;
 use Webkul\TimeOff\Models\Leave;
+use Webkul\TimeOff\Models\LeaveAllocation;
+use Webkul\TimeOff\Models\LeaveType;
 
 class LeaveApprovalService
 {
@@ -28,6 +31,7 @@ class LeaveApprovalService
         if (! in_array($leave->state, [State::CONFIRM, State::REFUSE], true)) {
             throw new RuntimeException('Only a new or refused leave request can be submitted.');
         }
+        $this->assertAllocationBalance($leave);
 
         // Hierarchy-route approval steps (e.g. "requester manager") resolve
         // against whoever is recorded as the ApprovalRequest's requester. A
@@ -118,5 +122,55 @@ class LeaveApprovalService
         }
 
         return $leave->fresh(['approvalRequest.decisions']);
+    }
+
+    /**
+     * The only balance check in this module (TimeOffHelper::
+     * handleLeaveAllocation()) runs exclusively inside the Filament Create/
+     * Edit page lifecycle — it's never reached from this service, so the
+     * "Submit for approval" table action (visible for a REFUSE-state leave)
+     * could push a refused request straight back to CONFIRM, and a
+     * subsequent approve() straight to VALIDATE_TWO, with zero balance
+     * validation at either step. That let a refused leave be resubmitted
+     * and approved even after the employee's available balance had since
+     * dropped below the requested days. Mirrors handleLeaveAllocation()'s
+     * own logic so both entry points enforce the same rule.
+     */
+    private function assertAllocationBalance(Leave $leave): void
+    {
+        $leaveType = LeaveType::find($leave->holiday_status_id);
+        // requires_allocation is stored as the plain string 'yes'/'no' (no
+        // enum cast on the model) — 'no' is PHP-truthy, so a bare `!`
+        // check on it never actually detects "does not require allocation".
+        // Compare against the enum's own value explicitly instead.
+        if (! $leaveType || $leaveType->requires_allocation !== \Webkul\TimeOff\Enums\RequiresAllocation::YES->value) {
+            return;
+        }
+
+        $endOfYear = Carbon::now()->endOfYear();
+        $totalAllocated = LeaveAllocation::where('employee_id', $leave->employee_id)
+            ->where('holiday_status_id', $leave->holiday_status_id)
+            ->where('state', State::VALIDATE_TWO->value)
+            ->where(function ($query) use ($endOfYear) {
+                $query->where('date_to', '<=', $endOfYear)->orWhereNull('date_to');
+            })
+            ->sum('number_of_days');
+
+        $totalTaken = Leave::where('employee_id', $leave->employee_id)
+            ->where('holiday_status_id', $leave->holiday_status_id)
+            ->where('id', '!=', $leave->id)
+            ->where('state', '!=', State::REFUSE->value)
+            ->sum('number_of_days');
+
+        $availableBalance = round($totalAllocated - $totalTaken, 1);
+
+        if ($totalAllocated <= 0) {
+            throw new RuntimeException("No active allocation exists for {$leaveType->name}.");
+        }
+        if ((float) $leave->number_of_days > $availableBalance) {
+            throw new RuntimeException(
+                "Insufficient balance: {$leave->number_of_days} day(s) requested, {$availableBalance} available."
+            );
+        }
     }
 }

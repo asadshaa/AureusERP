@@ -160,16 +160,26 @@ with more than one application (a normal, unprevented scenario) can be converted
 unrelated, possibly-refused later application's `job_id`/`department_id`, while the actual
 offer-stage application is left un-converted and never marked hired.
 
-### 14. Candidate email de-duplication has no normalization and no DB constraint
+### 14. Candidate email de-duplication had no normalization (correction below)
 `plugins/webkul/recruitments/src/Services/ApplicantIntakeService.php:68`
 
-When an inbound application's `external_application_id` doesn't match an existing one, the
-fallback candidate lookup is an exact-string `where('email_from', ...)` — no trim, no
-lowercasing, anywhere in the pipeline (not the validator, not either source adapter). There is
-also no unique index on `email_from` (unlike `external_application_id`, which has one). A
-byte-different but identical email (a stray leading space from an upstream ATS, different
-casing) creates a second `Candidate` row and a second duplicate `Partner` contact for the same
-real person, silently splitting their history.
+**Correction, added after implementation:** this finding was based on reading the PHP code in
+isolation and did not hold up under a live regression test. `email_from`'s column collation
+(`utf8mb4_unicode_ci`) already makes MySQL's own `where('email_from', ...)` comparison
+case-insensitive, so a same-email-different-casing re-import never actually created a duplicate
+`Candidate` on this database — and the leading/trailing-whitespace half of the original claim
+never reaches that comparison at all, since Laravel's `email` validation rule rejects a
+whitespace-padded address outright before the lookup runs. Neither half of the originally
+claimed failure scenario is reachable through `ApplicantIntakeService::import()`'s public
+interface. Verified directly against `aureuserp_testing` (same collation, same result).
+
+Fixed anyway, as hardening rather than a bug fix: `import()` now explicitly trims and
+lowercases the candidate email before both the lookup and storage, so correctness no longer
+silently depends on a collation nobody chose for this purpose — a case-sensitive collation, or a
+different database engine (e.g. PostgreSQL, whose default text comparison is case-sensitive),
+would have made this a real, reproducible bug. The regression test added instead pins down what
+the fix actually changes: the value stored in `email_from` is now canonical
+(`jane.doe@example.test`) regardless of the casing supplied on input.
 
 ---
 

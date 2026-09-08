@@ -31,9 +31,20 @@ class EmployeeSensitiveChangeService
             throw new RuntimeException('No supported sensitive employee changes were supplied.');
         }
 
+        // Hierarchy-route approval steps (e.g. "department manager") resolve
+        // against whoever is recorded as the ApprovalRequest's requester. An
+        // HR admin requests this change (gated by
+        // hr_manage_sensitive_employee_data, not by being the affected
+        // employee), but if we recorded *them* as the requester, hierarchy
+        // routing would resolve against *their* department/manager instead
+        // of the affected employee's — silently leaving it unapprovable by
+        // anyone, or routed to the wrong approver. Anchor to the affected
+        // employee's own user whenever they have one. Same fix as
+        // LeaveApprovalService::submit() / TimesheetWorkflowService::submit()
+        // / EmployeeRequestService::submit().
         return $this->approvals->submit(
             $employee,
-            $requester,
+            $employee->user ?? $requester,
             'employee_sensitive_change',
             isset($changes['base_salary']) ? (string) $changes['base_salary'] : null,
             [
