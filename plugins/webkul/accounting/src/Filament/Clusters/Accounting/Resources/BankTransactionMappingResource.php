@@ -286,7 +286,15 @@ class BankTransactionMappingResource extends Resource
                     // the raw text the user actually typed (marked unrecognized)
                     // so it reads differently from a genuinely blank cell — the
                     // two used to look identical.
-                    ->formatStateUsing(fn (?string $state, BankTransactionMapping $record): string => $state
+                    //
+                    // This must be ->state(), not ->formatStateUsing(): Filament's
+                    // TextColumn checks blank($rawState) BEFORE ever calling
+                    // formatStateUsing() and renders only the placeholder if so —
+                    // formatStateUsing() only reformats an already-non-blank state,
+                    // it can't substitute a value for a blank one. ->state()
+                    // overrides what "raw state" even is, so a resolved-vs-not
+                    // outcome is computed before that blank check ever runs.
+                    ->state(fn (BankTransactionMapping $record): string => $record->fsTag?->code
                         ?? ($record->fs_tag_raw_code !== null ? "{$record->fs_tag_raw_code} (unrecognized)" : '—'))
                     ->color(fn (BankTransactionMapping $record): ?string => $record->fs_tag_id === null && $record->fs_tag_raw_code !== null ? 'danger' : null)
                     ->tooltip(fn (BankTransactionMapping $record): ?string => $record->fs_tag_issue),

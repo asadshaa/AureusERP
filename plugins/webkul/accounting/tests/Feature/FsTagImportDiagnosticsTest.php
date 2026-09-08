@@ -184,11 +184,29 @@ it('shows the unrecognized code in the Bank Transaction Mapping grid instead of 
     $recognizedMapping = $lines[0]->mapping;
     $unrecognizedMapping = $lines[1]->mapping;
 
-    Livewire::test(ListBankTransactionMappings::class)
+    // assertTableColumnFormattedStateSet() calls formatState(getState())
+    // directly, which is NOT what the real page renders: TextColumn's own
+    // toEmbeddedHtml() checks blank($rawState) BEFORE ever calling
+    // formatStateUsing()/the column's computed state, and swaps in the
+    // placeholder instead of running the formatter at all when the
+    // underlying `fsTag.code` relationship value is null. A column built
+    // with formatStateUsing() alone can pass this assertion while still
+    // rendering blank on the actual page -- exactly what happened here
+    // during manual testing. Assert on toEmbeddedHtml() too so this stays
+    // caught.
+    $testable = Livewire::test(ListBankTransactionMappings::class)
         // A resolved tag still just shows its own code, unchanged.
         ->assertTableColumnFormattedStateSet('fsTag.code', 'FS-BANK-FEE', $recognizedMapping)
         // An unresolved one shows the raw code the user typed, marked
         // unrecognized -- not a blank cell indistinguishable from a
         // transaction that was never tagged at all.
         ->assertTableColumnFormattedStateSet('fsTag.code', 'FS-DOES-NOT-EXIST (unrecognized)', $unrecognizedMapping);
+
+    $column = $testable->instance()->getTable()->getColumn('fsTag.code');
+
+    $column->record($recognizedMapping->fresh('fsTag'));
+    expect(strip_tags($column->toEmbeddedHtml()))->toContain('FS-BANK-FEE');
+
+    $column->record($unrecognizedMapping->fresh('fsTag'));
+    expect(strip_tags($column->toEmbeddedHtml()))->toContain('FS-DOES-NOT-EXIST (unrecognized)');
 });
