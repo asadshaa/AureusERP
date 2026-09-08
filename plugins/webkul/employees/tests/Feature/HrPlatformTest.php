@@ -661,6 +661,110 @@ it('converts a sourced applicant to one company employee without duplicate re-en
         ->and($analytics['average_time_to_hire_days'])->toBeGreaterThanOrEqual(0);
 });
 
+it('gives a converted employee the job position\'s manager and department, instead of leaving them outside every hierarchy', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $user = hrPlatformUser($company);
+    $this->actingAs($user);
+    $department = Department::query()->create(['company_id' => $company->id, 'name' => 'Fleet Dispatch']);
+    $manager = hrPlatformEmployee($company, $user, 'Fleet Manager', null, $department);
+    // manager_id is only mass-assignable on the Recruitment subclass
+    // (merged into $fillable in its constructor) — the base
+    // EmployeeJobPosition does not carry it.
+    $job = \Webkul\Recruitment\Models\JobPosition::query()->create([
+        'company_id'    => $company->id,
+        'department_id' => $department->id,
+        'manager_id'    => $manager->id,
+        'name'          => 'Warehouse Assistant',
+        'is_active'     => true,
+    ]);
+    $candidate = Candidate::query()->create([
+        'company_id' => $company->id,
+        'name'       => 'New Hire',
+        'email_from' => 'new-hire@example.test',
+        'is_active'  => true,
+    ]);
+    // The application itself carries no department_id — reproduces the
+    // real scenario found live this session, where that has to fall back
+    // to the job position's own department, not just be left null.
+    $application = Applicant::query()->create([
+        'candidate_id' => $candidate->id,
+        'company_id'   => $company->id,
+        'job_id'       => $job->id,
+        'is_active'    => true,
+    ]);
+
+    $employee = app(CandidateConversionService::class)->convert($application);
+
+    expect($employee->parent_id)->toBe($manager->id)
+        ->and($employee->department_id)->toBe($department->id);
+
+    // The new hire must be visible to their own manager immediately —
+    // previously a converted employee had parent_id/department_id = null,
+    // so even the manager the job position pointed to couldn't see them.
+    $visibleToManager = app(HrHierarchyService::class)->visibleEmployeeIds($user, $company->id);
+    expect($visibleToManager)->toContain($employee->id);
+});
+
+it('converts a candidate using the application with an accepted offer, not just whichever was created most recently', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $user = hrPlatformUser($company);
+    $this->actingAs($user);
+    $firstJob = EmployeeJobPosition::query()->create(['company_id' => $company->id, 'name' => 'Backend Engineer', 'is_active' => true]);
+    $laterJob = EmployeeJobPosition::query()->create(['company_id' => $company->id, 'name' => 'Unrelated Later Role', 'is_active' => true]);
+    $candidate = Candidate::query()->create([
+        'company_id' => $company->id,
+        'name'       => 'Multi-Application Candidate',
+        'email_from' => 'multi-app@example.test',
+        'is_active'  => true,
+    ]);
+    // The actual offer is on the FIRST (lower-id) application; a later,
+    // unrelated application for a different role was created afterward —
+    // reproduces exactly the scenario found live this session.
+    $offerApplication = Applicant::query()->create([
+        'candidate_id' => $candidate->id,
+        'company_id'   => $company->id,
+        'job_id'       => $firstJob->id,
+        'offer_status' => 'accepted',
+        'is_active'    => true,
+    ]);
+    Applicant::query()->create([
+        'candidate_id' => $candidate->id,
+        'company_id'   => $company->id,
+        'job_id'       => $laterJob->id,
+        'is_active'    => true,
+    ]);
+
+    $employee = $candidate->createEmployee();
+
+    expect($employee)->not->toBeNull()
+        ->and($employee->job_id)->toBe($firstJob->id)
+        ->and($offerApplication->fresh()->application_status->value)->toBe('hired');
+});
+
+it('refuses to guess which application to convert when a candidate has multiple with no single accepted offer', function (): void {
+    $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
+    $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);
+    $user = hrPlatformUser($company);
+    $this->actingAs($user);
+    $jobA = EmployeeJobPosition::query()->create(['company_id' => $company->id, 'name' => 'Role A', 'is_active' => true]);
+    $jobB = EmployeeJobPosition::query()->create(['company_id' => $company->id, 'name' => 'Role B', 'is_active' => true]);
+    $candidate = Candidate::query()->create([
+        'company_id' => $company->id,
+        'name'       => 'Ambiguous Candidate',
+        'email_from' => 'ambiguous@example.test',
+        'is_active'  => true,
+    ]);
+    Applicant::query()->create(['candidate_id' => $candidate->id, 'company_id' => $company->id, 'job_id' => $jobA->id, 'is_active' => true]);
+    Applicant::query()->create(['candidate_id' => $candidate->id, 'company_id' => $company->id, 'job_id' => $jobB->id, 'is_active' => true]);
+
+    expect(fn () => $candidate->createEmployee())
+        ->toThrow(RuntimeException::class, 'none has an accepted offer');
+
+    expect(Employee::query()->where('name', 'Ambiguous Candidate')->exists())->toBeFalse();
+});
+
 it('normalizes idempotent manual and API applicant intake without crossing companies', function (): void {
     $currency = Currency::query()->where('code', 'PKR')->firstOrFail();
     $company = Company::factory()->create(['currency_id' => $currency->id, 'is_active' => true]);

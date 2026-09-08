@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Auth;
+use RuntimeException;
 use Webkul\Chatter\Traits\HasChatter;
 use Webkul\Chatter\Traits\HasLogActivity;
 use Webkul\Employee\Models\Employee;
@@ -118,14 +119,45 @@ class Candidate extends Model
 
     public function createEmployee(): ?Employee
     {
-        $application = Applicant::query()
-            ->where('candidate_id', $this->id)
-            ->latest('id')
-            ->first();
+        // Already converted: return the existing employee directly rather
+        // than re-deriving "the" application below — which application
+        // happens to look right no longer matters once conversion has
+        // already happened (CandidateConversionService::convert() is
+        // idempotent on employee_id anyway, but there's no reason to run
+        // the ambiguity check below for a no-op).
+        if ($this->employee_id) {
+            return Employee::find($this->employee_id);
+        }
 
-        return $application
-            ? app(CandidateConversionService::class)->convert($application)
-            : null;
+        $applications = Applicant::query()->where('candidate_id', $this->id)->get();
+
+        if ($applications->isEmpty()) {
+            return null;
+        }
+
+        // A candidate can legitimately have more than one application (e.g.
+        // applying to several postings). Picking "whichever was created
+        // most recently" silently converted the wrong one whenever that
+        // wasn't the application actually being hired. Require an
+        // unambiguous signal instead: convert outright when there's only
+        // one application, or when exactly one carries an accepted offer —
+        // the real, recruiter-set marker for "this is the one being hired."
+        // Anything else is a genuine ambiguity; surface it instead of
+        // guessing.
+        $accepted = $applications->where('offer_status', 'accepted');
+
+        $application = match (true) {
+            $applications->count() === 1 => $applications->first(),
+            $accepted->count() === 1     => $accepted->first(),
+            $accepted->count() > 1       => throw new RuntimeException(
+                'This candidate has more than one application with an accepted offer — resolve which one is actually being hired before converting.'
+            ),
+            default => throw new RuntimeException(
+                'This candidate has multiple applications and none has an accepted offer yet — accept the offer on the correct application before converting to an employee.'
+            ),
+        };
+
+        return app(CandidateConversionService::class)->convert($application);
     }
 
     protected static function boot()

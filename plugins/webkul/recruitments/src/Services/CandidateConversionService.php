@@ -42,10 +42,21 @@ class CandidateConversionService
                 throw new RuntimeException('The application job does not belong to the application company.');
             }
 
+            // The job position a candidate is hired into is the natural
+            // source of who manages them and which department they land in
+            // — JobPosition::manager_id and ::department_id exist precisely
+            // for this. Previously neither was consulted: a converted
+            // employee always got parent_id = null and, whenever the
+            // application itself didn't carry its own department_id,
+            // department_id = null too. That silently left every new hire
+            // outside everyone's HR hierarchy — invisible to their own
+            // manager, and even to whoever just converted them, unless that
+            // person separately held hr_view_all_records.
             $employee = Employee::query()->create([
                 'name'              => $candidate->name,
                 'job_id'            => $application->job_id,
-                'department_id'     => $application->department_id,
+                'department_id'     => $application->department_id ?? $application->job?->department_id,
+                'parent_id'         => $application->job?->manager_id,
                 'company_id'        => $application->company_id,
                 'partner_id'        => $candidate->partner_id,
                 'work_email'        => $candidate->email_from,
