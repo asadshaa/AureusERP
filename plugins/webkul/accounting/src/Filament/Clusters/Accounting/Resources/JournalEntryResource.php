@@ -730,7 +730,17 @@ class JournalEntryResource extends Resource
                     ->disabled(fn ($record) => in_array($record?->parent_state, [MoveState::POSTED, MoveState::CANCEL])),
                 Select::make('taxes')
                     ->label(__('accounting::filament/clusters/accounting/resources/journal-entry.form.tabs.lines.repeater.fields.taxes'))
-                    ->relationship('taxes', 'name')
+                    ->relationship(
+                        'taxes',
+                        'name',
+                        modifyQueryUsing: fn (Builder $query, Get $get, ?Model $record) => Tax::scopeTaxQuery(
+                            $query,
+                            $get('../../company_id') ?? $get('company_id') ?? Auth::user()?->default_company_id,
+                            null,
+                            $record?->taxes()->pluck('accounts_taxes.id')->map(fn ($id) => (int) $id)->all() ?? [],
+                        ),
+                    )
+                    ->rules([Tax::taxValidationRule(null)])
                     ->getOptionLabelFromRecordUsing(function ($record): string {
                         return $record->name.' ('.$record->type_tax_use->getLabel().')';
                     })
