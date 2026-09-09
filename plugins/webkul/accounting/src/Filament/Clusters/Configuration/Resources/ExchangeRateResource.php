@@ -56,6 +56,7 @@ class ExchangeRateResource extends Resource
         return $schema->components([
             Section::make('Dated exchange rate')->columns(2)->schema([
                 Select::make('company_id')
+                    ->options(fn (): array => [(int) Auth::user()?->default_company_id => Auth::user()?->defaultCompany?->name])
                     ->default(Auth::user()?->default_company_id)
                     ->disabled()
                     ->dehydrated()
