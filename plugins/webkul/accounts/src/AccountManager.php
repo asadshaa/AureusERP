@@ -2112,6 +2112,41 @@ class AccountManager
         if (! $record->currency) {
             throw new Exception(__('accounts::account-manager.post-action-validate.currency-archived'));
         }
+
+        if ($record->isSaleDocument(true)) {
+            $this->assertSalesTaxCompliance($record);
+        }
+    }
+
+    /**
+     * A company must never be charged with sales tax it isn't actually
+     * registered for, and a registered company must have its STRN on file
+     * before that registration can take effect on a real invoice. Only
+     * applies to sale-side documents (invoices/refunds/receipts the company
+     * itself issues) — a vendor bill's tax is the vendor's own registration
+     * to answer for, not this company's.
+     */
+    private function assertSalesTaxCompliance(AccountMove $record): void
+    {
+        $hasTaxedLine = $record->invoiceLines()->whereHas('taxes')->exists();
+
+        if (! $hasTaxedLine) {
+            return;
+        }
+
+        $company = $record->company;
+
+        if (! $company) {
+            return;
+        }
+
+        if (! $company->is_sales_tax_registered) {
+            throw new Exception(__('accounts::account-manager.post-action-validate.sales-tax-not-registered', ['company' => $company->name]));
+        }
+
+        if (blank($company->strn)) {
+            throw new Exception(__('accounts::account-manager.post-action-validate.strn-required', ['company' => $company->name]));
+        }
     }
 
     public function isReconciliationAllowedForLines($lines)
