@@ -1084,7 +1084,15 @@ class AccountManager
 
             $deltaBalance = $sourceBalance - $paymentBalance;
 
-            if ($paymentRegister->companyCurrency->isZero($deltaBalance)) {
+            // PaymentRegister has no companyCurrency relation (or backing
+            // column) at all, unlike MoveLine -- this always resolved to
+            // null here and crashed on the very first cross-currency
+            // payment that reached this branch. Falling back to
+            // company->currency mirrors the same defensive pattern already
+            // used for this exact accessor in MoveLine::computeReconciliationStatus().
+            $companyCurrency = $paymentRegister->companyCurrency ?? $paymentRegister->company->currency;
+
+            if ($companyCurrency->isZero($deltaBalance)) {
                 continue;
             }
 
