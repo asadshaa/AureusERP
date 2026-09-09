@@ -117,11 +117,10 @@ class CompanyResource extends Resource
                                             ->columnSpanFull(),
                                         TextInput::make('strn')
                                             ->label('STRN')
-                                            ->helperText('Sales Tax Registration Number. Required before this company can post a taxed invoice.')
+                                            ->helperText('Sales Tax Registration Number. You can save without it while registration is in progress, but this company cannot post a taxed invoice until it\'s filled in.')
                                             ->unique(ignoreRecord: true)
                                             ->maxLength(255)
-                                            ->visible(fn (Get $get): bool => (bool) $get('is_sales_tax_registered'))
-                                            ->required(fn (Get $get): bool => (bool) $get('is_sales_tax_registered')),
+                                            ->visible(fn (Get $get): bool => (bool) $get('is_sales_tax_registered')),
                                         TextInput::make('website')
                                             ->url()
                                             ->prefixIcon('heroicon-o-globe-alt')

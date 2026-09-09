@@ -133,10 +133,9 @@ class PartnerForm
                             ->default(false),
                         TextInput::make('strn')
                             ->label('STRN')
-                            ->helperText('Sales Tax Registration Number. Required once "Registered for sales tax" is on.')
+                            ->helperText('Sales Tax Registration Number. You can save without it while registration is in progress, but this partner cannot be used on a taxed invoice until it\'s filled in.')
                             ->maxLength(255)
-                            ->visible(fn (Get $get): bool => (bool) $get('is_sales_tax_registered'))
-                            ->required(fn (Get $get): bool => (bool) $get('is_sales_tax_registered')),
+                            ->visible(fn (Get $get): bool => (bool) $get('is_sales_tax_registered')),
                         TextInput::make('job_title')
                             ->label(__('partners::filament/resources/partner.form.sections.general.fields.job-title'))
                             ->placeholder('e.g. CEO')
