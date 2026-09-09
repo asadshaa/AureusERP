@@ -226,6 +226,51 @@ it('enforces the shared configurable approval chain when one is configured for e
         ->and($approved->approved_by)->toBe($fixture['user']->id);
 });
 
+it('refuses to finalize an exchange rate edited after its approval was granted', function (): void {
+    $fixture = multiCurrencyTestFixture();
+    $rate = ExchangeRate::query()->create([
+        'company_id'         => $fixture['company']->id,
+        'source_currency_id' => $fixture['foreign']->id,
+        'target_currency_id' => $fixture['base']->id,
+        'effective_date'     => '2026-08-26',
+        'rate'               => '281.500000000000000',
+        'rate_type'          => ExchangeRateType::Transaction,
+        'source'             => ExchangeRateSource::Manual,
+        'approval_status'    => ExchangeRateApprovalStatus::Draft,
+        'created_by'         => $fixture['user']->id,
+    ]);
+    $workflow = ApprovalWorkflow::query()->create([
+        'company_id' => $fixture['company']->id, 'creator_id' => $fixture['user']->id,
+        'name'       => 'Exchange rate approval (edit-after-approve)', 'request_type' => 'exchange_rate_change',
+        'priority'   => 100, 'is_active' => true,
+    ]);
+    $workflow->steps()->create([
+        'sequence'           => 1, 'name' => 'Finance controller', 'approver_user_id' => $fixture['user']->id,
+        'required_approvals' => 1,
+    ]);
+    $service = app(ExchangeRateApprovalService::class);
+
+    // Submit and get the workflow-level approval on the original value ...
+    $request = $service->submit($rate, $fixture['user']);
+    app(ApprovalEngine::class)->approve($request, $fixture['user'], 'Rate source checked.');
+
+    // ... but before anyone clicks the resource's own "approve" action, the
+    // rate itself gets edited. The stale approval must not be usable to
+    // finalize this new, never-actually-approved value.
+    $rate->update(['rate' => '999.000000000000000']);
+
+    expect(fn () => $service->approve($rate, $fixture['user']))
+        ->toThrow(RuntimeException::class, 'exchange rate value was changed from "281.5" to "999"');
+
+    expect($rate->fresh()->approval_status)->toBe(ExchangeRateApprovalStatus::Draft);
+
+    // Editing it back to exactly what was approved must let it through again.
+    $rate->update(['rate' => '281.500000000000000']);
+    $approved = $service->approve($rate, $fixture['user']);
+
+    expect($approved->approval_status)->toBe(ExchangeRateApprovalStatus::Approved);
+});
+
 it('creates canonical company-scoped bank and offset accounts without overwriting duplicates', function (): void {
     $fixture = multiCurrencyTestFixture();
     $fixture['company']->enabledCurrencies()->syncWithoutDetaching([
