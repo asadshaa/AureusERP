@@ -15,6 +15,7 @@ use Webkul\Accounting\Enums\ExchangeRateSource;
 use Webkul\Accounting\Enums\ExchangeRateType;
 use Webkul\Accounting\Exceptions\MissingExchangeRateException;
 use Webkul\Accounting\Filament\Clusters\Accounting\Pages\ImportBankStatement;
+use Webkul\Accounting\Filament\Clusters\Configuration\Resources\ExchangeRateResource\Pages\ListExchangeRates;
 use Webkul\Accounting\Filament\Clusters\Reporting\Pages\BalanceSheet;
 use Webkul\Accounting\Filament\Clusters\Reporting\Pages\DirectCashFlow;
 use Webkul\Accounting\Filament\Clusters\Reporting\Pages\ProfitLoss;
@@ -269,6 +270,50 @@ it('refuses to finalize an exchange rate edited after its approval was granted',
     $approved = $service->approve($rate, $fixture['user']);
 
     expect($approved->approval_status)->toBe(ExchangeRateApprovalStatus::Approved);
+});
+
+it('shows a clean notification instead of a crash when the approve action fails', function (): void {
+    $fixture = multiCurrencyTestFixture();
+    $rate = ExchangeRate::query()->create([
+        'company_id'         => $fixture['company']->id,
+        'source_currency_id' => $fixture['foreign']->id,
+        'target_currency_id' => $fixture['base']->id,
+        'effective_date'     => '2026-08-27',
+        'rate'               => '281.500000000000000',
+        'rate_type'          => ExchangeRateType::Transaction,
+        'source'             => ExchangeRateSource::Manual,
+        'approval_status'    => ExchangeRateApprovalStatus::Draft,
+        'created_by'         => $fixture['user']->id,
+    ]);
+    ApprovalWorkflow::query()->create([
+        'company_id' => $fixture['company']->id, 'creator_id' => $fixture['user']->id,
+        'name'       => 'Exchange rate approval (notification test)', 'request_type' => 'exchange_rate_change',
+        'priority'   => 100, 'is_active' => true,
+    ])->steps()->create([
+        'sequence' => 1, 'name' => 'Finance controller', 'approver_user_id' => $fixture['user']->id,
+        'required_approvals' => 1,
+    ]);
+
+    Permission::findOrCreate(AccountingPermissions::ApproveExchangeRates, 'web');
+    Permission::findOrCreate(AccountingPermissions::ManageExchangeRates, 'web');
+    app(PermissionRegistrar::class)->forgetCachedPermissions();
+    $fixture['user']->givePermissionTo([
+        AccountingPermissions::ApproveExchangeRates,
+        AccountingPermissions::ManageExchangeRates,
+    ]);
+    test()->actingAs($fixture['user']);
+
+    \Filament\Facades\Filament::setCurrentPanel(\Filament\Facades\Filament::getPanel('admin'));
+    \Filament\Facades\Filament::bootCurrentPanel();
+
+    // A configured workflow exists but nothing has actually approved this
+    // rate yet -- clicking "approve" directly must surface a clean,
+    // catchable error, not an unhandled RuntimeException crash page.
+    Livewire::test(ListExchangeRates::class)
+        ->callTableAction('approve', $rate)
+        ->assertNotified('Could not approve this exchange rate');
+
+    expect($rate->fresh()->approval_status)->toBe(ExchangeRateApprovalStatus::Draft);
 });
 
 it('creates canonical company-scoped bank and offset accounts without overwriting duplicates', function (): void {

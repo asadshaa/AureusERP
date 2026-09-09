@@ -28,6 +28,8 @@ use Webkul\Accounting\Models\ExchangeRate;
 use Webkul\Accounting\Services\Currency\ExchangeRateApprovalService;
 use Webkul\Accounting\Support\AccountingPermissions;
 use Webkul\Support\Models\Currency;
+use Throwable;
+
 
 class ExchangeRateResource extends Resource
 {
@@ -107,8 +109,12 @@ class ExchangeRateResource extends Resource
                     ->visible(fn (ExchangeRate $record): bool => $record->approval_status !== ExchangeRateApprovalStatus::Approved
                         && app(ExchangeRateApprovalService::class)->requiresConfiguredApproval($record))
                     ->action(function (ExchangeRate $record): void {
-                        $request = app(ExchangeRateApprovalService::class)->submit($record, Auth::user());
-                        Notification::make()->success()->title("Approval request APR-{$request->id} is in the shared approval queue.")->send();
+                        try {
+                            $request = app(ExchangeRateApprovalService::class)->submit($record, Auth::user());
+                            Notification::make()->success()->title("Approval request APR-{$request->id} is in the shared approval queue.")->send();
+                        } catch (Throwable $e) {
+                            Notification::make()->danger()->title('Could not submit for approval')->body($e->getMessage())->send();
+                        }
                     }),
                 Action::make('approve')
                     ->authorize(AccountingPermissions::ApproveExchangeRates)
@@ -116,8 +122,12 @@ class ExchangeRateResource extends Resource
                     ->requiresConfirmation()
                     ->visible(fn (ExchangeRate $record): bool => $record->approval_status !== ExchangeRateApprovalStatus::Approved)
                     ->action(function (ExchangeRate $record): void {
-                        app(ExchangeRateApprovalService::class)->approve($record, Auth::user());
-                        Notification::make()->success()->title('Exchange rate approved. Missing bank conversions were refreshed.')->send();
+                        try {
+                            app(ExchangeRateApprovalService::class)->approve($record, Auth::user());
+                            Notification::make()->success()->title('Exchange rate approved. Missing bank conversions were refreshed.')->send();
+                        } catch (Throwable $e) {
+                            Notification::make()->danger()->title('Could not approve this exchange rate')->body($e->getMessage())->send();
+                        }
                     }),
                 Action::make('reject')
                     ->authorize(AccountingPermissions::ApproveExchangeRates)
@@ -125,8 +135,12 @@ class ExchangeRateResource extends Resource
                     ->requiresConfirmation()
                     ->visible(fn (ExchangeRate $record): bool => $record->approval_status !== ExchangeRateApprovalStatus::Rejected)
                     ->action(function (ExchangeRate $record): void {
-                        app(ExchangeRateApprovalService::class)->reject($record, Auth::user());
-                        Notification::make()->warning()->title('Exchange rate rejected.')->send();
+                        try {
+                            app(ExchangeRateApprovalService::class)->reject($record, Auth::user());
+                            Notification::make()->warning()->title('Exchange rate rejected.')->send();
+                        } catch (Throwable $e) {
+                            Notification::make()->danger()->title('Could not reject this exchange rate')->body($e->getMessage())->send();
+                        }
                     }),
             ])
             ->defaultSort('effective_date', 'desc');
