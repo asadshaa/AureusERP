@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 use Webkul\Account\Models\BankStatement;
 use Webkul\Account\Models\Move;
+use Webkul\Accounting\Console\Commands\CheckDocumentIntegrityCommand;
 use Webkul\Accounting\Contracts\DocumentStorageProvider;
 use Webkul\Accounting\Database\Seeders\AccountingPermissionSeeder;
 use Webkul\Accounting\Database\Seeders\IsoCurrencySeeder;
@@ -75,6 +76,9 @@ class AccountingServiceProvider extends PackageServiceProvider
                 ReportWorkbookSeeder::class,
                 IsoCurrencySeeder::class,
                 AccountingPermissionSeeder::class,
+            ])
+            ->hasCommands([
+                CheckDocumentIntegrityCommand::class,
             ])
             ->icon('accounting')
             ->hasInstallCommand(function (InstallCommand $command) {

@@ -9,6 +9,9 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use RuntimeException;
+use Webkul\Account\Enums\MoveState;
+use Webkul\Account\Models\BankStatement;
+use Webkul\Account\Models\Move;
 use Webkul\Accounting\Contracts\DocumentStorageProvider;
 use Webkul\Accounting\Enums\DocumentAuditAction;
 use Webkul\Accounting\Enums\DocumentStatus;
@@ -95,17 +98,29 @@ class DocumentService
      * Add a new version to an existing document. The prior version is
      * never touched or deleted -- accounting evidence keeps its full
      * history.
+     *
+     * $changeReason is mandatory here (unlike the very first upload, where
+     * there's nothing yet to explain a change against) -- replacing the
+     * file behind a document that may already be attached as evidence
+     * needs a reason on the audit trail, not just a timestamp.
      */
     public function addVersion(
         User $user,
         Document $document,
         UploadedFile $file,
-        ?string $changeReason = null,
+        string $changeReason,
         ?string $ipAddress = null,
     ): DocumentVersion {
         $this->assertCompanyAccess($user, $document->company_id);
         $this->assertPermission($user, AccountingPermissions::ManageDocuments, $document->company_id, $document);
         $this->validateFile($file);
+
+        if (trim($changeReason) === '') {
+            throw new RuntimeException(
+                'A reason is required when replacing a document with a new version -- explain what changed and why. '.
+                'This stays on the permanent audit trail.'
+            );
+        }
 
         return DB::transaction(function () use ($user, $document, $file, $changeReason, $ipAddress) {
             $nextVersionNumber = (int) $document->versions()->max('version_number') + 1;
@@ -170,12 +185,37 @@ class DocumentService
         return $attachment;
     }
 
+    /**
+     * Detaching removes only the link between a document and a record --
+     * the document itself and its full history are untouched either way.
+     * Even so, once the record it's attached to is posted (an Invoice/Bill,
+     * via the shared Move model) or a completed Bank Statement, that link
+     * is locked: the evidence a posted, legally-final transaction was
+     * recorded with must stay visible against it permanently. Attaching
+     * MORE evidence to a posted record is still allowed -- only removing
+     * an existing link is locked.
+     */
     public function detach(User $user, DocumentAttachment $attachment, ?string $ipAddress = null): void
     {
         $document = $attachment->document;
 
         $this->assertCompanyAccess($user, $document->company_id);
         $this->assertPermission($user, AccountingPermissions::ManageDocuments, $document->company_id, $document);
+
+        $record = $attachment->attachable;
+
+        if ($record && $this->isAttachableLocked($record)) {
+            $this->recordAudit($document, $user, DocumentAuditAction::AccessDenied, $ipAddress, [
+                'reason'          => 'posted_record_locked',
+                'attachable_type' => $attachment->attachable_type,
+                'attachable_id'   => $attachment->attachable_id,
+            ]);
+
+            throw new RuntimeException(
+                'This document is attached to a posted record and can no longer be detached. '.
+                'Posted invoices/bills and completed bank statements keep their supporting evidence permanently for audit purposes.'
+            );
+        }
 
         $this->recordAudit($document, $user, DocumentAuditAction::Detached, $ipAddress, [
             'attachable_type' => $attachment->attachable_type,
@@ -359,6 +399,27 @@ class DocumentService
             'uploaded_by'       => $user->id,
             'change_reason'     => $changeReason,
         ]);
+    }
+
+    /**
+     * Whether $record's own state marks it as posted/final. Only two
+     * attachable record types exist for accounting documents so far --
+     * Move (Invoice/Bill/Journal Entry all share this table and its
+     * MoveState) and BankStatement -- so this stays a short, explicit
+     * match rather than an interface every attachable type would need to
+     * implement for one boolean.
+     */
+    private function isAttachableLocked(Model $record): bool
+    {
+        if ($record instanceof Move) {
+            return $record->state === MoveState::POSTED;
+        }
+
+        if ($record instanceof BankStatement) {
+            return (bool) $record->is_completed;
+        }
+
+        return false;
     }
 
     private function buildStoragePath(Document $document, UploadedFile $file, int $versionNumber): string

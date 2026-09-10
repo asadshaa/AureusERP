@@ -50,4 +50,9 @@ class LocalDocumentStorageProvider implements DocumentStorageProvider
     {
         return $this->disk->size($path);
     }
+
+    public function allFiles(?string $directory = null): array
+    {
+        return $this->disk->allFiles($directory);
+    }
 }

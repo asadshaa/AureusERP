@@ -158,7 +158,8 @@ class DocumentResource extends Resource
                             ->acceptedFileTypes(DocumentService::ALLOWED_MIME_TYPES),
                         Textarea::make('change_reason')
                             ->label('Reason for the new version')
-                            ->helperText('Why is this replacing the current file? This stays on the audit trail.'),
+                            ->required()
+                            ->helperText('Why is this replacing the current file? This is mandatory and stays on the audit trail.'),
                     ])
                     ->action(function (Document $record, array $data): void {
                         try {
@@ -166,7 +167,7 @@ class DocumentResource extends Resource
                                 Auth::user(),
                                 $record,
                                 $data['file'],
-                                $data['change_reason'] ?? null,
+                                $data['change_reason'],
                                 request()->ip(),
                             );
 

@@ -35,4 +35,15 @@ interface DocumentStorageProvider
      * truncated or corrupted the file.
      */
     public function size(string $path): int;
+
+    /**
+     * Every object path currently in storage under $directory (recursive),
+     * or the whole disk if omitted. Used only by the integrity checker to
+     * find orphaned objects -- files sitting in storage with no
+     * DocumentVersion row pointing at them -- never by any user-facing
+     * document action.
+     *
+     * @return array<int, string>
+     */
+    public function allFiles(?string $directory = null): array;
 }
