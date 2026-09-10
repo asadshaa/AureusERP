@@ -16,6 +16,7 @@ use Webkul\Accounting\Contracts\DocumentStorageProvider;
 use Webkul\Accounting\Enums\DocumentAuditAction;
 use Webkul\Accounting\Enums\DocumentStatus;
 use Webkul\Accounting\Enums\DocumentType;
+use Webkul\Accounting\Events\DocumentContentChanged;
 use Webkul\Accounting\Models\Document;
 use Webkul\Accounting\Models\DocumentAttachment;
 use Webkul\Accounting\Models\DocumentVersion;
@@ -71,7 +72,7 @@ class DocumentService
         $this->assertPermission($user, AccountingPermissions::ManageDocuments, $companyId, null);
         $this->validateFile($file);
 
-        return DB::transaction(function () use ($user, $companyId, $documentType, $title, $description, $file, $ipAddress) {
+        $document = DB::transaction(function () use ($user, $companyId, $documentType, $title, $description, $file, $ipAddress) {
             $document = Document::create([
                 'company_id'    => $companyId,
                 'creator_id'    => $user->id,
@@ -92,6 +93,14 @@ class DocumentService
 
             return $document->refresh();
         });
+
+        // Fired outside the transaction, only once the document is
+        // durably committed -- see DocumentContentChanged for why
+        // DocumentService fires this without knowing what (if anything)
+        // reacts to it.
+        DocumentContentChanged::dispatch($document);
+
+        return $document;
     }
 
     /**
@@ -122,7 +131,7 @@ class DocumentService
             );
         }
 
-        return DB::transaction(function () use ($user, $document, $file, $changeReason, $ipAddress) {
+        $version = DB::transaction(function () use ($user, $document, $file, $changeReason, $ipAddress) {
             $nextVersionNumber = (int) $document->versions()->max('version_number') + 1;
 
             $version = $this->storeVersion($document, $file, $user, $nextVersionNumber, $changeReason);
@@ -138,6 +147,10 @@ class DocumentService
 
             return $version;
         });
+
+        DocumentContentChanged::dispatch($document->refresh());
+
+        return $version;
     }
 
     /**
@@ -297,10 +310,57 @@ class DocumentService
             throw new RuntimeException("Document \"{$document->title}\" has no uploaded file yet.");
         }
 
+        $contents = $this->readVerifiedBytes($document, $version, $user, $ipAddress);
+
+        $this->recordAudit($document, $user, DocumentAuditAction::Downloaded, $ipAddress, [
+            'version_id' => $version->id,
+        ]);
+
+        return [
+            'contents' => $contents,
+            'version'  => $version,
+            'document' => $document,
+        ];
+    }
+
+    /**
+     * Read the current version's verified bytes for a SYSTEM process --
+     * a queued Drive-export job, not an interactive user -- so there is
+     * no acting User to permission-check against and no "Downloaded"
+     * audit entry (the caller is responsible for its own audit entry
+     * describing what it actually did with the bytes, e.g. DriveExported).
+     * Still runs through the exact same checksum/missing-object
+     * verification as retrieveContents() -- system callers get no less
+     * scrutiny than a human downloading through the UI.
+     */
+    public function readCurrentVersionForSync(Document $document): array
+    {
+        $version = $document->currentVersion;
+
+        if (! $version) {
+            throw new RuntimeException("Document \"{$document->title}\" has no uploaded file yet.");
+        }
+
+        return [
+            'contents' => $this->readVerifiedBytes($document, $version, null, null),
+            'version'  => $version,
+        ];
+    }
+
+    /**
+     * Shared by retrieveContents() (user-facing) and
+     * readCurrentVersionForSync() (system-facing) -- the actual
+     * existence + checksum verification, identical either way. $user is
+     * null for a system caller; the AccessDenied audit on a failure
+     * still fires, just attributed to no one rather than misattributed
+     * to a human who didn't do it.
+     */
+    private function readVerifiedBytes(Document $document, DocumentVersion $version, ?User $user, ?string $ipAddress): string
+    {
         if (! $this->storage->exists($version->storage_path)) {
-            $this->recordAudit($document, $user, DocumentAuditAction::AccessDenied, $ipAddress, [
-                'reason'      => 'missing_object',
-                'version_id'  => $version->id,
+            $this->recordSystemOrUserAudit($document, $user, DocumentAuditAction::AccessDenied, $ipAddress, [
+                'reason'     => 'missing_object',
+                'version_id' => $version->id,
             ]);
 
             throw new RuntimeException(
@@ -312,7 +372,7 @@ class DocumentService
         $contents = $this->storage->get($version->storage_path);
 
         if (hash('sha256', $contents) !== $version->checksum_sha256) {
-            $this->recordAudit($document, $user, DocumentAuditAction::AccessDenied, $ipAddress, [
+            $this->recordSystemOrUserAudit($document, $user, DocumentAuditAction::AccessDenied, $ipAddress, [
                 'reason'     => 'checksum_mismatch',
                 'version_id' => $version->id,
             ]);
@@ -323,15 +383,24 @@ class DocumentService
             );
         }
 
-        $this->recordAudit($document, $user, DocumentAuditAction::Downloaded, $ipAddress, [
-            'version_id' => $version->id,
-        ]);
+        return $contents;
+    }
 
-        return [
-            'contents' => $contents,
-            'version'  => $version,
-            'document' => $document,
-        ];
+    private function recordSystemOrUserAudit(Document $document, ?User $user, DocumentAuditAction $action, ?string $ipAddress, array $metadata): void
+    {
+        if ($user) {
+            $this->recordAudit($document, $user, $action, $ipAddress, $metadata);
+
+            return;
+        }
+
+        $document->audits()->create([
+            'company_id' => $document->company_id,
+            'actor_id'   => null,
+            'action'     => $action,
+            'metadata'   => $metadata,
+            'ip_address' => $ipAddress,
+        ]);
     }
 
     public function archive(User $user, Document $document, ?string $ipAddress = null): Document

@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use Illuminate\Support\Facades\Auth;
 use Webkul\Accounting\Database\Factories\DocumentFactory;
@@ -64,6 +65,18 @@ class Document extends Model
     public function audits(): HasMany
     {
         return $this->hasMany(DocumentAudit::class)->latest();
+    }
+
+    /**
+     * Present only once this document has been exported to Drive at
+     * least once -- absence of a row means "never synced", same meaning
+     * as DriveSyncStatus::NotSynced would if the row existed. Callers
+     * that need a status to display should fall back to NotSynced
+     * rather than treating a missing row as an error.
+     */
+    public function driveSync(): HasOne
+    {
+        return $this->hasOne(DocumentDriveSync::class);
     }
 
     /**

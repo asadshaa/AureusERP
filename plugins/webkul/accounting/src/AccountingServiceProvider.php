@@ -5,16 +5,21 @@ namespace Webkul\Accounting;
 use Filament\Panel;
 use Filament\Support\Assets\Css;
 use Filament\Support\Facades\FilamentAsset;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
 use Webkul\Account\Models\BankStatement;
 use Webkul\Account\Models\Move;
+use Webkul\Accounting\Console\Commands\AuthorizeDriveCommand;
 use Webkul\Accounting\Console\Commands\CheckDocumentIntegrityCommand;
 use Webkul\Accounting\Contracts\DocumentStorageProvider;
+use Webkul\Accounting\Contracts\DriveClient;
 use Webkul\Accounting\Database\Seeders\AccountingPermissionSeeder;
 use Webkul\Accounting\Database\Seeders\IsoCurrencySeeder;
 use Webkul\Accounting\Database\Seeders\ReportWorkbookSeeder;
+use Webkul\Accounting\Events\DocumentContentChanged;
 use Webkul\Accounting\Filament\Widgets\JournalChartWidget;
+use Webkul\Accounting\Listeners\DispatchDriveSyncOnDocumentChanged;
 use Webkul\Accounting\Livewire\InvoiceSummary;
 use Webkul\Accounting\Models\Bill;
 use Webkul\Accounting\Models\DocumentAttachment;
@@ -25,6 +30,7 @@ use Webkul\Accounting\Services\Bank\BankStatementParserRegistry;
 use Webkul\Accounting\Services\Bank\CommonWorkbookBankStatementParser;
 use Webkul\Accounting\Services\Bank\HblBankStatementParser;
 use Webkul\Accounting\Services\Bank\MeezanBankStatementParser;
+use Webkul\Accounting\Services\Drive\GoogleDriveClient;
 use Webkul\Accounting\Services\MeasureResolverRegistry;
 use Webkul\Accounting\Services\ReportValueProviderRegistry;
 use Webkul\Accounting\Services\Resolvers\LedgerMeasureResolver;
@@ -73,6 +79,7 @@ class AccountingServiceProvider extends PackageServiceProvider
                 '2026_09_10_000002_create_accounting_document_versions_table',
                 '2026_09_10_000003_create_accounting_document_attachments_table',
                 '2026_09_10_000004_create_accounting_document_audits_table',
+                '2026_09_11_000001_create_accounting_document_drive_syncs_table',
             ])
             ->runsMigrations()
             ->hasSeeders([
@@ -82,6 +89,7 @@ class AccountingServiceProvider extends PackageServiceProvider
             ])
             ->hasCommands([
                 CheckDocumentIntegrityCommand::class,
+                AuthorizeDriveCommand::class,
             ])
             ->icon('accounting')
             ->hasInstallCommand(function (InstallCommand $command) {
@@ -102,6 +110,24 @@ class AccountingServiceProvider extends PackageServiceProvider
         $this->registerLivewireComponents();
 
         $this->registerDocumentAttachmentRelations();
+
+        $this->registerDriveSyncListener();
+    }
+
+    /**
+     * The single point where accounting_drive.enabled actually gates
+     * anything happening: when false, DocumentContentChanged has no
+     * listener at all, so firing it (which DocumentService always does,
+     * unconditionally) costs nothing beyond the event dispatch itself --
+     * no job, no Drive API client construction, nothing.
+     */
+    private function registerDriveSyncListener(): void
+    {
+        if (! config('accounting_drive.enabled')) {
+            return;
+        }
+
+        Event::listen(DocumentContentChanged::class, DispatchDriveSyncOnDocumentChanged::class);
     }
 
     /**
@@ -185,6 +211,13 @@ class AccountingServiceProvider extends PackageServiceProvider
         $this->app->bind(DocumentStorageProvider::class, fn () => new LocalDocumentStorageProvider(
             Storage::disk('accounting_documents'),
         ));
+
+        // Same reasoning as DocumentStorageProvider above: DriveSyncService
+        // only ever knows this interface, never Google\Client or the Drive
+        // service directly. Tests bind a fake implementation instead of
+        // this one -- see tests/Helpers/DriveTestHelper.php -- so none of
+        // them need real Google credentials.
+        $this->app->bind(DriveClient::class, GoogleDriveClient::class);
 
         $this->app->singleton(ReportValueProviderRegistry::class);
 

@@ -15,10 +15,13 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Auth;
 use Throwable;
+use Webkul\Accounting\Contracts\DriveClient;
 use Webkul\Accounting\Enums\DocumentStatus;
 use Webkul\Accounting\Enums\DocumentType;
+use Webkul\Accounting\Enums\DriveSyncStatus;
 use Webkul\Accounting\Filament\Clusters\Accounting;
 use Webkul\Accounting\Filament\Clusters\Accounting\Resources\DocumentResource\Pages\ListDocuments;
+use Webkul\Accounting\Jobs\SyncDocumentToDriveJob;
 use Webkul\Accounting\Models\Document;
 use Webkul\Accounting\Services\DocumentService;
 use Webkul\Accounting\Support\AccountingPermissions;
@@ -42,7 +45,7 @@ class DocumentResource extends Resource
     {
         return parent::getEloquentQuery()
             ->forCompany(Auth::user()?->default_company_id)
-            ->with(['currentVersion', 'creator']);
+            ->with(['currentVersion', 'creator', 'driveSync']);
     }
 
     public static function canViewAny(): bool
@@ -122,6 +125,21 @@ class DocumentResource extends Resource
                     ->label('Uploaded at')
                     ->dateTime()
                     ->sortable(),
+                TextColumn::make('driveSync.status')
+                    ->label('Drive status')
+                    ->badge()
+                    // No driveSync row yet reads the same as NotSynced --
+                    // that IS its meaning (see Document::driveSync()), so
+                    // this is a display fallback, not masking an error.
+                    ->formatStateUsing(fn (?DriveSyncStatus $state): string => ($state ?? DriveSyncStatus::NotSynced)->getLabel())
+                    ->color(fn (?DriveSyncStatus $state): string|array|null => ($state ?? DriveSyncStatus::NotSynced)->getColor())
+                    ->tooltip(fn (Document $record): ?string => $record->driveSync?->last_sync_error)
+                    ->visible(fn (): bool => (bool) config('accounting_drive.enabled')),
+                TextColumn::make('driveSync.last_synced_at')
+                    ->label('Last synced')
+                    ->dateTime()
+                    ->placeholder('Never')
+                    ->visible(fn (): bool => (bool) config('accounting_drive.enabled')),
             ])
             ->filters([
                 SelectFilter::make('document_type')->options(DocumentType::options()),
@@ -144,6 +162,28 @@ class DocumentResource extends Resource
                             Notification::make()->danger()->title('Could not download this document')->body($e->getMessage())->send();
                         }
                     }),
+
+                Action::make('syncToDrive')
+                    ->label(fn (Document $record): string => $record->driveSync?->status === DriveSyncStatus::Failed ? 'Retry Drive sync' : 'Sync now')
+                    ->icon('heroicon-o-arrow-path')
+                    ->color(fn (Document $record): string => $record->driveSync?->status === DriveSyncStatus::Failed ? 'danger' : 'gray')
+                    ->authorize(AccountingPermissions::ManageDocuments)
+                    ->visible(fn (): bool => (bool) config('accounting_drive.enabled'))
+                    ->action(function (Document $record): void {
+                        SyncDocumentToDriveJob::dispatch($record->id);
+
+                        Notification::make()->success()->title('Sync to Google Drive queued')->send();
+                    }),
+
+                Action::make('openInDrive')
+                    ->label('Open in Drive')
+                    ->icon('heroicon-o-arrow-top-right-on-square')
+                    ->color('gray')
+                    ->visible(fn (Document $record): bool => (bool) config('accounting_drive.enabled') && $record->driveSync?->exists_in_drive)
+                    ->url(fn (Document $record): ?string => $record->driveSync?->drive_file_id
+                        ? app(DriveClient::class)->webViewLink($record->driveSync->drive_file_id)
+                        : null)
+                    ->openUrlInNewTab(),
 
                 Action::make('addVersion')
                     ->label('Add version')
