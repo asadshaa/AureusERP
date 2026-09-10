@@ -7,12 +7,15 @@ use Filament\Support\Assets\Css;
 use Filament\Support\Facades\FilamentAsset;
 use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
+use Webkul\Account\Models\BankStatement;
+use Webkul\Account\Models\Move;
 use Webkul\Accounting\Contracts\DocumentStorageProvider;
 use Webkul\Accounting\Database\Seeders\AccountingPermissionSeeder;
 use Webkul\Accounting\Database\Seeders\IsoCurrencySeeder;
 use Webkul\Accounting\Database\Seeders\ReportWorkbookSeeder;
 use Webkul\Accounting\Filament\Widgets\JournalChartWidget;
 use Webkul\Accounting\Livewire\InvoiceSummary;
+use Webkul\Accounting\Models\DocumentAttachment;
 use Webkul\Accounting\Repositories\LedgerBalanceRepository;
 use Webkul\Accounting\Services\Bank\BankStatementParserRegistry;
 use Webkul\Accounting\Services\Bank\CommonWorkbookBankStatementParser;
@@ -90,6 +93,36 @@ class AccountingServiceProvider extends PackageServiceProvider
         $this->registerCustomCss();
 
         $this->registerLivewireComponents();
+
+        $this->registerDocumentAttachmentRelations();
+    }
+
+    /**
+     * BankStatement lives in the accounts plugin, which accounting depends
+     * on -- but the dependency can never run the other way, so accounts
+     * itself must never reference Document/DocumentAttachment directly.
+     * resolveRelationUsing() lets accounting attach a real relation to a
+     * model it doesn't own, entirely from this side, with the base model
+     * file untouched.
+     */
+    private function registerDocumentAttachmentRelations(): void
+    {
+        BankStatement::resolveRelationUsing(
+            'documentAttachments',
+            fn ($model) => $model->morphMany(DocumentAttachment::class, 'attachable'),
+        );
+
+        // Registered on the base Move too (not just the invoices plugin's
+        // own Invoice subclass) so anything built directly on Move --
+        // including this suite's own test fixtures -- gets the relation
+        // without needing the invoices plugin installed at all.
+        // resolveRelationUsing() is keyed by exact class name, not
+        // inherited down a hierarchy, so a subclass (Invoice) still needs
+        // its own registration too -- see InvoiceServiceProvider.
+        Move::resolveRelationUsing(
+            'documentAttachments',
+            fn ($model) => $model->morphMany(DocumentAttachment::class, 'attachable'),
+        );
     }
 
     public function packageRegistered(): void
