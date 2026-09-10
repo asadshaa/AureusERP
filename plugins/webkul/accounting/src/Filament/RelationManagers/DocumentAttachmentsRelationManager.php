@@ -9,6 +9,7 @@ use Filament\Schemas\Schema;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Auth;
 use Throwable;
 use Webkul\Accounting\Enums\DocumentStatus;
@@ -36,6 +37,39 @@ class DocumentAttachmentsRelationManager extends RelationManager
     protected static string $relationship = 'documentAttachments';
 
     protected static ?string $title = 'Supporting documents';
+
+    /**
+     * Filament v4 relation managers default to lazy-loading (CanBeLazy's
+     * $isLazy = true): the table only renders once its placeholder
+     * scrolls into view, via an Alpine x-intersect trigger. That's a
+     * reasonable default for a heavy/rarely-opened tab, but the whole
+     * point of this feature is that supporting evidence should be
+     * immediately obvious on a record, not something that only appears
+     * once someone happens to scroll to exactly the right spot -- so it's
+     * disabled here.
+     */
+    protected static bool $isLazy = false;
+
+    /**
+     * Filament's default RelationManager::canViewForRecord() decides
+     * whether to show this manager at all by running Laravel's normal
+     * `authorize('viewAny', DocumentAttachment::class)` -- which requires a
+     * registered Eloquent Policy class to even be found, or it's denied
+     * (and the whole manager silently disappears, with no error). There is
+     * no DocumentAttachmentPolicy, deliberately: every real access
+     * decision here already goes through AccountingPermissions +
+     * DocumentService (company isolation, permission checks, audit --
+     * see each Action's own ->authorize() below and DocumentService
+     * itself). This override replaces Filament's policy-based gate with
+     * that same permission check, instead of adding a Policy class whose
+     * only job would be to defer back to it.
+     */
+    public static function canViewForRecord(Model $ownerRecord, string $pageClass): bool
+    {
+        \Log::info('DEBUG2 canViewForRecord called', ['owner' => $ownerRecord::class, 'page' => $pageClass]);
+
+        return Auth::user()?->can(AccountingPermissions::ViewDocuments) ?? false;
+    }
 
     public static function getEloquentQuery(Builder $query): Builder
     {

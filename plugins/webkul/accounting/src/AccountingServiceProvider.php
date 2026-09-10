@@ -16,7 +16,10 @@ use Webkul\Accounting\Database\Seeders\IsoCurrencySeeder;
 use Webkul\Accounting\Database\Seeders\ReportWorkbookSeeder;
 use Webkul\Accounting\Filament\Widgets\JournalChartWidget;
 use Webkul\Accounting\Livewire\InvoiceSummary;
+use Webkul\Accounting\Models\Bill;
 use Webkul\Accounting\Models\DocumentAttachment;
+use Webkul\Accounting\Models\Invoice as AccountingInvoice;
+use Webkul\Accounting\Models\JournalEntry;
 use Webkul\Accounting\Repositories\LedgerBalanceRepository;
 use Webkul\Accounting\Services\Bank\BankStatementParserRegistry;
 use Webkul\Accounting\Services\Bank\CommonWorkbookBankStatementParser;
@@ -124,6 +127,42 @@ class AccountingServiceProvider extends PackageServiceProvider
         // inherited down a hierarchy, so a subclass (Invoice) still needs
         // its own registration too -- see InvoiceServiceProvider.
         Move::resolveRelationUsing(
+            'documentAttachments',
+            fn ($model) => $model->morphMany(DocumentAttachment::class, 'attachable'),
+        );
+
+        // Bill, JournalEntry and this plugin's OWN Invoice subclass are
+        // three more thin Move subclasses, but -- unlike the invoices
+        // plugin's Invoice -- all three are owned by this same plugin
+        // (accounting depends on accounts for Move, and Bill/JournalEntry/
+        // Invoice live here alongside DocumentAttachment itself), so their
+        // registration doesn't need to live in a separate service provider
+        // the way the invoices plugin's does. Same "not inherited by
+        // subclasses" caveat as above applies -- each still needs its own
+        // line.
+        //
+        // Confusingly, there are actually THREE separate Invoice model
+        // classes in this codebase, each with their own Filament resource:
+        // Webkul\Account\Models\Invoice (accounts, base, no UI of its own),
+        // Webkul\Invoice\Models\Invoice (invoices plugin, its own
+        // top-level "Invoices" nav item at /admin/invoices/..., wired in
+        // InvoiceServiceProvider), and this one -- Webkul\Accounting\Models
+        // \Invoice, used by THIS plugin's own InvoiceResource under
+        // Accounting > Customers > Invoices. All three needed their own
+        // resolveRelationUsing() registration; missing this one is exactly
+        // what silently broke the "Supporting documents" tab on the
+        // Accounting > Customers > Invoices page during manual testing.
+        Bill::resolveRelationUsing(
+            'documentAttachments',
+            fn ($model) => $model->morphMany(DocumentAttachment::class, 'attachable'),
+        );
+
+        JournalEntry::resolveRelationUsing(
+            'documentAttachments',
+            fn ($model) => $model->morphMany(DocumentAttachment::class, 'attachable'),
+        );
+
+        AccountingInvoice::resolveRelationUsing(
             'documentAttachments',
             fn ($model) => $model->morphMany(DocumentAttachment::class, 'attachable'),
         );

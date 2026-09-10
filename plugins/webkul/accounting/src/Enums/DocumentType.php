@@ -8,6 +8,8 @@ enum DocumentType: string implements HasLabel
 {
     case Invoice = 'invoice';
 
+    case Bill = 'bill';
+
     case Receipt = 'receipt';
 
     case BankStatement = 'bank_statement';
@@ -22,6 +24,7 @@ enum DocumentType: string implements HasLabel
     {
         return match ($this) {
             self::Invoice         => __('accounting::enums/document-type.invoice'),
+            self::Bill            => __('accounting::enums/document-type.bill'),
             self::Receipt         => __('accounting::enums/document-type.receipt'),
             self::BankStatement   => __('accounting::enums/document-type.bank-statement'),
             self::PaymentEvidence => __('accounting::enums/document-type.payment-evidence'),
@@ -34,6 +37,7 @@ enum DocumentType: string implements HasLabel
     {
         return [
             self::Invoice->value         => __('accounting::enums/document-type.invoice'),
+            self::Bill->value            => __('accounting::enums/document-type.bill'),
             self::Receipt->value         => __('accounting::enums/document-type.receipt'),
             self::BankStatement->value   => __('accounting::enums/document-type.bank-statement'),
             self::PaymentEvidence->value => __('accounting::enums/document-type.payment-evidence'),
