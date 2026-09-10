@@ -5,7 +5,9 @@ namespace Webkul\Accounting;
 use Filament\Panel;
 use Filament\Support\Assets\Css;
 use Filament\Support\Facades\FilamentAsset;
+use Illuminate\Support\Facades\Storage;
 use Livewire\Livewire;
+use Webkul\Accounting\Contracts\DocumentStorageProvider;
 use Webkul\Accounting\Database\Seeders\AccountingPermissionSeeder;
 use Webkul\Accounting\Database\Seeders\IsoCurrencySeeder;
 use Webkul\Accounting\Database\Seeders\ReportWorkbookSeeder;
@@ -19,6 +21,7 @@ use Webkul\Accounting\Services\Bank\MeezanBankStatementParser;
 use Webkul\Accounting\Services\MeasureResolverRegistry;
 use Webkul\Accounting\Services\ReportValueProviderRegistry;
 use Webkul\Accounting\Services\Resolvers\LedgerMeasureResolver;
+use Webkul\Accounting\Services\Storage\LocalDocumentStorageProvider;
 use Webkul\PluginManager\Console\Commands\InstallCommand;
 use Webkul\PluginManager\Console\Commands\UninstallCommand;
 use Webkul\PluginManager\Package;
@@ -59,6 +62,10 @@ class AccountingServiceProvider extends PackageServiceProvider
                 '2026_08_25_000002_add_invoice_import_reference_fields',
                 '2026_08_25_000003_add_fs_tags_to_journal_lines',
                 '2026_08_25_000004_link_bank_mappings_to_obligations',
+                '2026_09_10_000001_create_accounting_documents_table',
+                '2026_09_10_000002_create_accounting_document_versions_table',
+                '2026_09_10_000003_create_accounting_document_attachments_table',
+                '2026_09_10_000004_create_accounting_document_audits_table',
             ])
             ->runsMigrations()
             ->hasSeeders([
@@ -87,6 +94,22 @@ class AccountingServiceProvider extends PackageServiceProvider
 
     public function packageRegistered(): void
     {
+        // DocumentService only ever knows this interface, never Storage::disk()
+        // or an SDK directly -- swapping to an S3-specific provider later
+        // (or, further out, Google Drive) means changing this one binding,
+        // not any business logic.
+        //
+        // Resolved via an explicit closure (not a bare class-string bind)
+        // so Storage::disk('accounting_documents') is looked up fresh on
+        // every resolution. A bare bind would let Laravel's container
+        // auto-wire the constructor's Filesystem-typed parameter to
+        // whatever the DEFAULT disk is instead of leaving it null for the
+        // constructor's own fallback to run -- which silently ignores
+        // Storage::fake('accounting_documents') in tests.
+        $this->app->bind(DocumentStorageProvider::class, fn () => new LocalDocumentStorageProvider(
+            Storage::disk('accounting_documents'),
+        ));
+
         $this->app->singleton(ReportValueProviderRegistry::class);
 
         $this->app->singleton(BankStatementParserRegistry::class, function (): BankStatementParserRegistry {

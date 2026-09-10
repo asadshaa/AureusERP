@@ -62,6 +62,14 @@ final class AccountingPermissions
 
     public const FxRevaluationPage = 'page_accounting_fx_revaluation';
 
+    public const ViewDocuments = 'accounting_view_documents';
+
+    public const ManageDocuments = 'accounting_manage_documents';
+
+    public const DownloadDocuments = 'accounting_download_documents';
+
+    public const DeleteDocuments = 'accounting_delete_documents';
+
     /**
      * @return array<int, string>
      */
@@ -97,6 +105,10 @@ final class AccountingPermissions
             self::ExchangeRatesPage,
             self::MissingRatesPage,
             self::FxRevaluationPage,
+            self::ViewDocuments,
+            self::ManageDocuments,
+            self::DownloadDocuments,
+            self::DeleteDocuments,
             'page_accounting_overview',
             'page_accounting_manage_taxes',
             'page_accounting_manage_products',
@@ -160,6 +172,7 @@ final class AccountingPermissions
             self::PostJournal,
             self::RunFxRevaluation,
             self::FxRevaluationPage,
+            self::DeleteDocuments,
         ]));
     }
 }
