@@ -353,7 +353,7 @@ class DocumentService
             'storage_disk'      => 'accounting_documents',
             'storage_path'      => $path,
             'original_filename' => $file->getClientOriginalName(),
-            'mime_type'         => $file->getClientMimeType() ?: $file->getMimeType(),
+            'mime_type'         => $file->getMimeType() ?: $file->getClientMimeType(),
             'file_size'         => $storedSize,
             'checksum_sha256'   => $checksum,
             'uploaded_by'       => $user->id,
@@ -388,7 +388,14 @@ class DocumentService
             throw new RuntimeException("This file is larger than the {$maxMb}MB limit for accounting documents. Reduce its size and try again.");
         }
 
-        $mimeType = $file->getClientMimeType() ?: $file->getMimeType();
+        // getMimeType() sniffs the file's actual bytes (via PHP's fileinfo
+        // extension); getClientMimeType() is just whatever Content-Type the
+        // browser/OS decided to send, which is frequently wrong or generic
+        // (a real PDF reported as "application/octet-stream" is common on
+        // Windows) and, in a real deployment, trivially spoofable by the
+        // client. Only fall back to the client-reported value if PHP
+        // genuinely couldn't sniff anything.
+        $mimeType = $file->getMimeType() ?: $file->getClientMimeType();
 
         if (! in_array($mimeType, self::ALLOWED_MIME_TYPES, true)) {
             throw new RuntimeException(
