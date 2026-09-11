@@ -133,7 +133,15 @@ class DocumentResource extends Resource
                     // this is a display fallback, not masking an error.
                     ->formatStateUsing(fn (?DriveSyncStatus $state): string => ($state ?? DriveSyncStatus::NotSynced)->getLabel())
                     ->color(fn (?DriveSyncStatus $state): string|array|null => ($state ?? DriveSyncStatus::NotSynced)->getColor())
-                    ->tooltip(fn (Document $record): ?string => $record->driveSync?->last_sync_error)
+                    // Gated to ManageDocuments, not just the ViewDocuments
+                    // this whole table already requires -- last_sync_error
+                    // is raw exception text from the Google API/OAuth
+                    // client, which can carry request/response detail that
+                    // shouldn't be visible to a merely-viewing user, only
+                    // to whoever can actually act on it (retry via Sync now).
+                    ->tooltip(fn (Document $record): ?string => Auth::user()?->can(AccountingPermissions::ManageDocuments)
+                        ? $record->driveSync?->last_sync_error
+                        : null)
                     ->visible(fn (): bool => (bool) config('accounting_drive.enabled')),
                 TextColumn::make('driveSync.last_synced_at')
                     ->label('Last synced')

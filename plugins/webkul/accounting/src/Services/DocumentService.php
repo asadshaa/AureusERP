@@ -324,14 +324,31 @@ class DocumentService
     }
 
     /**
-     * Read the current version's verified bytes for a SYSTEM process --
-     * a queued Drive-export job, not an interactive user -- so there is
-     * no acting User to permission-check against and no "Downloaded"
-     * audit entry (the caller is responsible for its own audit entry
-     * describing what it actually did with the bytes, e.g. DriveExported).
-     * Still runs through the exact same checksum/missing-object
-     * verification as retrieveContents() -- system callers get no less
-     * scrutiny than a human downloading through the UI.
+     * @internal Not part of DocumentService's normal API. This is the ONE
+     * method on this class with no permission check and no company scoping
+     * -- deliberately, because it exists for a SYSTEM process (a queued
+     * Drive-export job) where there is no acting User to check against, not
+     * because the check was forgotten. It hands back a document's raw file
+     * bytes to whatever calls it, full stop.
+     *
+     * DriveSyncService is the only intended caller, and it is only ever
+     * invoked from SyncDocumentToDriveJob with a company-scoped Document it
+     * already loaded directly by id -- no user input flows into which
+     * document gets read. Do NOT reach for this as a shortcut anywhere a
+     * real user or an HTTP request is involved, even internally within this
+     * plugin -- use retrieveContents() there, which enforces
+     * DownloadDocuments + company isolation the way every other read path
+     * in this class does. If a genuine new need for unauthenticated,
+     * system-level access to document bytes shows up beyond Drive sync,
+     * that's a reason to revisit this method's design, not to add another
+     * caller to it as-is.
+     *
+     * No "Downloaded" audit entry is recorded either -- the caller is
+     * responsible for its own audit entry describing what it actually did
+     * with the bytes (e.g. DriveExported). Still runs through the exact
+     * same checksum/missing-object verification as retrieveContents() --
+     * system callers get no less scrutiny than a human downloading through
+     * the UI, just no permission gate in front of it.
      */
     public function readCurrentVersionForSync(Document $document): array
     {
@@ -398,7 +415,12 @@ class DocumentService
             'company_id' => $document->company_id,
             'actor_id'   => null,
             'action'     => $action,
-            'metadata'   => $metadata,
+            // Same normalization recordAudit() applies for a user-attributed
+            // row: an empty array stores as NULL, not '[]'. Both call sites
+            // today always pass a non-empty $metadata, but keeping the two
+            // branches identical means that stays true if a future caller
+            // doesn't.
+            'metadata'   => $metadata ?: null,
             'ip_address' => $ipAddress,
         ]);
     }
