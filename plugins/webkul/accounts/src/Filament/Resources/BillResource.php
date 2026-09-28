@@ -1263,7 +1263,9 @@ class BillResource extends Resource
 
         $set('price_unit', round($priceUnit, 2));
 
-        $set('taxes', $product->productTaxes->pluck('id')->toArray());
+        // A bill is a purchase document -- it must default to the product's
+        // Supplier Taxes (e.g. Input Tax), not its Sales/Product Taxes.
+        $set('taxes', $product->supplierTaxes->pluck('id')->toArray());
 
         $uomQuantity = static::calculateUnitQuantity($get('uom_id'), $get('quantity'));
 
@@ -1327,7 +1329,14 @@ class BillResource extends Resource
 
     private static function calculateUnitPrice($uomId, $product)
     {
-        $price = $product->price ?? $product->cost;
+        // A bill is a purchase document -- it must default to the product's
+        // purchase Cost, not its sales Price. The previous `price ?? cost`
+        // (copied from InvoiceResource, where that's correct) only fell back
+        // to cost when price was NULL, so a purchase-only product with
+        // Price deliberately left at 0 -- the documented, recommended setup
+        // for something you only ever buy -- got a 0 unit price on every
+        // bill instead of its real cost.
+        $price = $product->cost ?? $product->price;
 
         if (! $uomId || ! $product->uom) {
             return $price;
