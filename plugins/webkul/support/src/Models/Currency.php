@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use InvalidArgumentException;
 use RuntimeException;
@@ -98,6 +99,25 @@ class Currency extends Model
 
         $date = $date ?? now()->toDateString();
 
+        // Prefer a real, approved rate from the accounting plugin's Exchange
+        // Rates workflow (accounting_exchange_rates) over the legacy
+        // CurrencyRate table below. This model lives in the lowest-level
+        // plugin and must not import a class from `accounting` (accounting
+        // depends on this plugin, never the reverse -- see AGENTS.md), so
+        // this queries the table directly by name rather than through the
+        // Accounting\Models\ExchangeRate model. Without this, no invoice or
+        // bill in any foreign currency ever saw a real exchange rate: this
+        // method fell through to the legacy table (which nothing populates
+        // via the app's own UI) and silently returned 1.0, even with a real,
+        // approved rate sitting in Exchange Rates. Confirmed live: a real
+        // USD invoice posted with its PKR-equivalent debit/credit set to the
+        // raw USD figures, a ~278x understatement at the rate used here.
+        $newRate = $this->resolveApprovedExchangeRate($fromCurrency, $toCurrency, $company, $date);
+
+        if ($newRate !== null) {
+            return $newRate;
+        }
+
         $toRateRecord = $toCurrency->rates()
             ->where(function ($query) use ($company) {
                 $query->whereNull('company_id');
@@ -127,6 +147,55 @@ class Currency extends Model
         Log::warning("Currency::getConversionRate() fell back to a 1:1 rate for {$fromLabel} to {$toLabel} on {$date} -- no CurrencyRate record was found.");
 
         return 1.0;
+    }
+
+    /**
+     * Looks up a real, approved rate from accounting_exchange_rates for the
+     * from->to pair, or its inverse (a rate is stored once per pair, e.g.
+     * "1 USD = 278.50 PKR", and must serve both PKR->USD and USD->PKR
+     * lookups). Returns null -- not 1.0 -- when nothing is found, so the
+     * caller can fall through to the legacy table/strict-throw/1.0-fallback
+     * chain below exactly as before.
+     */
+    private function resolveApprovedExchangeRate(self $fromCurrency, self $toCurrency, $company, string $date): ?float
+    {
+        $companyCondition = fn ($query) => $query->where(function ($q) use ($company) {
+            $q->whereNull('company_id');
+
+            if ($company) {
+                $q->orWhere('company_id', $company->id);
+            }
+        });
+
+        $direct = DB::table('accounting_exchange_rates')
+            ->where('source_currency_id', $fromCurrency->id)
+            ->where('target_currency_id', $toCurrency->id)
+            ->where('approval_status', 'approved')
+            ->whereDate('effective_date', '<=', $date)
+            ->tap($companyCondition)
+            ->orderByDesc('effective_date')
+            ->orderByDesc('id')
+            ->value('rate');
+
+        if ($direct !== null) {
+            return (float) $direct;
+        }
+
+        $inverse = DB::table('accounting_exchange_rates')
+            ->where('source_currency_id', $toCurrency->id)
+            ->where('target_currency_id', $fromCurrency->id)
+            ->where('approval_status', 'approved')
+            ->whereDate('effective_date', '<=', $date)
+            ->tap($companyCondition)
+            ->orderByDesc('effective_date')
+            ->orderByDesc('id')
+            ->value('rate');
+
+        if ($inverse !== null && (float) $inverse != 0.0) {
+            return 1 / (float) $inverse;
+        }
+
+        return null;
     }
 
     public function round(float $amount): float
