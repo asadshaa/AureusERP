@@ -89,6 +89,27 @@ class ReverseAction extends Action
 
         $this->action(function (Move $record, array $data, $livewire) {
             try {
+                // Locks the row and re-checks for an existing reversal inside
+                // the action's own DB transaction, so two near-simultaneous
+                // clicks (a genuine double-click, or a retried request on a
+                // slow connection) can't both pass this check before either
+                // has committed a MoveReversal. Confirmed live: without this,
+                // reversing a posted entry once produced two new moves -- the
+                // correct reversal and an exact duplicate of the original
+                // bad entry, immediately posted, requiring a second manual
+                // reversal to clean up.
+                $record = Move::query()->lockForUpdate()->findOrFail($record->id);
+
+                if (Move::query()->where('reversed_entry_id', $record->id)->exists()) {
+                    Notification::make()
+                        ->warning()
+                        ->title('Already reversed')
+                        ->body('This entry already has a reversal. Refresh the page to see it instead of creating another one.')
+                        ->send();
+
+                    $this->halt(shouldRollBackDatabaseTransaction: true);
+                }
+
                 $moveReversal = MoveReversal::create([
                     'journal_id' => $data['journal_id'],
                     'date'       => $data['date'],

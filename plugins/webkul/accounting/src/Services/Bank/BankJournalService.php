@@ -166,6 +166,8 @@ class BankJournalService
                 throw new RuntimeException('Draft journal is not balanced and cannot be posted.');
             }
 
+            $this->assertClearingAccountsNotOverdrawn($move);
+
             DB::table('accounts_account_moves')->where('id', $move->id)->update([
                 'state'         => MoveState::POSTED->value,
                 'review_status' => 'posted',
@@ -240,6 +242,88 @@ class BankJournalService
             (string) $match->company_amount,
             (string) $match->outgoing_amount,
         ];
+    }
+
+    /**
+     * A bank-mapping journal is only ever internally balanced by construction
+     * (debit always equals credit) -- that alone doesn't catch posting a
+     * SECOND, unrelated settlement against a payment-clearing account that a
+     * different, already-posted mapping already cleared back to zero. Two
+     * such postings, each individually balanced, together silently invent
+     * real cash: the real Bank account gains money that never actually
+     * arrived, while the clearing account is driven past zero into a
+     * balance no legitimate in-transit payment could produce. Confirmed
+     * live: a manually-mapped duplicate bank line with its Offset GL set to
+     * an already-cleared Outstanding Receipts account posted with zero
+     * warnings and put a real, false Rs 100,300 into the Bank GL account.
+     *
+     * "Clearing account" here is derived from real data, not a hardcoded ID:
+     * any account that some Payment has actually used as its
+     * outstanding_account_id. Its expected resting side (debit-positive for
+     * inbound/receipts, credit-positive for outbound/payments) is likewise
+     * derived from which payment_type used it, not assumed from
+     * account_type -- both Outstanding Receipts and Outstanding Payments in
+     * this app are coded as the same asset_current type despite expecting
+     * opposite normal balances.
+     */
+    protected function assertClearingAccountsNotOverdrawn(Move $move): void
+    {
+        $lines = DB::table('accounts_account_move_lines')
+            ->where('move_id', $move->id)
+            ->select('account_id', 'debit', 'credit')
+            ->get();
+
+        $clearingAccountIds = $lines->pluck('account_id')->unique()->values();
+
+        if ($clearingAccountIds->isEmpty()) {
+            return;
+        }
+
+        $expectedSides = DB::table('accounts_account_payments')
+            ->whereIn('outstanding_account_id', $clearingAccountIds)
+            ->whereNotNull('outstanding_account_id')
+            ->select('outstanding_account_id', 'payment_type')
+            ->distinct()
+            ->get()
+            ->groupBy('outstanding_account_id')
+            ->map(fn ($rows) => $rows->pluck('payment_type')->unique());
+
+        foreach ($lines as $line) {
+            $sides = $expectedSides->get($line->account_id);
+
+            // Not a clearing account (never used as any payment's outstanding
+            // account), or used for both directions -- nothing safe to assert.
+            if (! $sides || $sides->count() !== 1) {
+                continue;
+            }
+
+            $expectedInbound = $sides->first() === 'inbound';
+
+            $currentBalance = DB::table('accounts_account_move_lines')
+                ->join('accounts_account_moves', 'accounts_account_moves.id', '=', 'accounts_account_move_lines.move_id')
+                ->where('accounts_account_moves.state', MoveState::POSTED->value)
+                ->where('accounts_account_move_lines.account_id', $line->account_id)
+                ->selectRaw('COALESCE(SUM(accounts_account_move_lines.debit), 0) - COALESCE(SUM(accounts_account_move_lines.credit), 0) as balance')
+                ->value('balance');
+
+            $newBalance = BigDecimal::of((string) ($currentBalance ?? '0'))
+                ->plus((string) $line->debit)
+                ->minus((string) $line->credit);
+
+            $overdrawn = $expectedInbound
+                ? $newBalance->isLessThan('-0.01')
+                : $newBalance->isGreaterThan('0.01');
+
+            if ($overdrawn) {
+                throw new RuntimeException(
+                    'This posting would drive a payment-clearing account past its expected balance '.
+                    '(new balance would be '.$newBalance.'), which normally means it is settling a '.
+                    'payment that was already cleared by a different, already-posted mapping. '.
+                    'Check whether the underlying invoice/bill payment has already been reconciled '.
+                    'before posting this line again.'
+                );
+            }
+        }
     }
 
     protected function insertLines(
