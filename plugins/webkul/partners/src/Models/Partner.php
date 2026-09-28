@@ -165,6 +165,14 @@ class Partner extends Authenticatable implements FilamentUser
 
         static::creating(function ($partner) {
             $partner->creator_id ??= Auth::id();
+
+            // Every Partner form (base and every plugin's Customer/Vendor
+            // variant) has no company_id field at all -- without this, a
+            // freshly created record gets company_id = NULL, which is
+            // invisible to PartnerResource::getEloquentQuery()'s strict
+            // company scope (DEF-011) the instant it's created, 404ing on
+            // the very redirect the create page just sent it to.
+            $partner->company_id ??= Auth::user()?->default_company_id;
         });
     }
 }
