@@ -466,7 +466,18 @@ class PaymentRegister extends Model
 
         $companyId = $batchResult['lines']->first()->company_id;
 
-        $paymentMethodRelation = $paymentType == 'inbound'
+        // $paymentType is a PaymentType backed enum instance (see the
+        // 'payment_type' => PaymentType::class cast above), never loosely
+        // equal (==) to its own raw string value in PHP -- so the previous
+        // `$paymentType == 'inbound'` was always false regardless of the
+        // real direction, and this always resolved to outbound payment
+        // method lines. Compare against the enum case instead, tolerating
+        // a raw string too in case a caller ever passes one directly.
+        $isInbound = $paymentType instanceof PaymentType
+            ? $paymentType === PaymentType::RECEIVE
+            : $paymentType === PaymentType::RECEIVE->value;
+
+        $paymentMethodRelation = $isInbound
             ? 'inboundPaymentMethodLines'
             : 'outboundPaymentMethodLines';
 
