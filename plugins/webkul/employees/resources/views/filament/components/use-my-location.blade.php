@@ -24,7 +24,7 @@
 
             const onError = (error) => {
                 if (error && error.code === 1) {
-                    this.status = 'Location permission denied. Click the lock/settings icon in the browser address bar, set Location to "Allow", and try again.'
+                    this.status = 'Location permission denied. Click the lock/settings icon in the browser address bar, set Location to Allow, and try again.'
                 } else if (error && error.code === 2) {
                     this.status = 'Location unavailable on this device (common on desktops without GPS/Wi-Fi). Please enter the coordinates manually.'
                 } else if (error && error.code === 3) {

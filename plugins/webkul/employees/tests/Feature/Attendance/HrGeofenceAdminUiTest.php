@@ -290,3 +290,16 @@ it('makes the assignment list read-only for someone who cannot manage the employ
     Livewire::test(WorkLocationAssignmentsRelationManager::class, ['ownerRecord' => $f['employee'], 'pageClass' => ViewEmployee::class])
         ->assertTableActionHidden('create');
 });
+
+it('renders the "Use my current location" helper as a working Alpine component, not as visible script text', function () {
+    $html = view('employees::filament.components.use-my-location')->render();
+
+    // A double quote inside x-data="..." ends the attribute early and dumps the
+    // rest of the script onto the page as text (seen live on the Work Location form).
+    $dom = new DOMDocument;
+    @$dom->loadHTML('<?xml encoding="utf-8"?>'.$html);
+    $root = $dom->getElementsByTagName('div')->item(0);
+
+    expect($root->getAttribute('x-data'))->toContain('getCurrentPosition')->toContain('enableHighAccuracy')
+        ->and(trim(preg_replace('/\s+/', ' ', $root->textContent)))->toBe('Use my current location');
+});
