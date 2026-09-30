@@ -2,6 +2,7 @@
 
 namespace Webkul\Employee\Filament\Clusters\Configurations\Resources;
 
+use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\CreateAction;
 use Filament\Actions\DeleteAction;
@@ -19,6 +20,9 @@ use Filament\Infolists\Components\IconEntry;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
+use Filament\Schemas\Components\Section;
+use Filament\Schemas\Components\Utilities\Get;
+use Filament\Schemas\Components\View;
 use Filament\Schemas\Schema;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
@@ -30,10 +34,13 @@ use Filament\Tables\Filters\QueryBuilder\Constraints\TextConstraint;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Grouping\Group;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Auth;
 use Webkul\Employee\Enums\WorkLocation as WorkLocationEnum;
 use Webkul\Employee\Filament\Clusters\Configurations;
 use Webkul\Employee\Filament\Clusters\Configurations\Resources\WorkLocationResource\Pages\ListWorkLocations;
 use Webkul\Employee\Models\WorkLocation;
+use Webkul\Employee\Support\HrPermissions;
 
 class WorkLocationResource extends Resource
 {
@@ -73,16 +80,79 @@ class WorkLocationResource extends Resource
                     ->required(),
                 TextInput::make('location_number')
                     ->label(__('employees::filament/clusters/configurations/resources/work-location.form.location-number')),
+                // Was an unscoped list of every company. Offer only companies the
+                // user may act in; WorkLocation::saving() re-checks this server-side.
                 Select::make('company_id')
                     ->searchable()
                     ->label(__('employees::filament/clusters/configurations/resources/work-location.form.company'))
                     ->required()
                     ->preload()
-                    ->relationship('company', 'name'),
+                    ->default(fn (): ?int => Auth::user()?->default_company_id)
+                    ->relationship('company', 'name', modifyQueryUsing: fn (Builder $query): Builder => $query->whereIn('id', self::accessibleCompanyIds())),
                 Toggle::make('is_active')
                     ->label(__('employees::filament/clusters/configurations/resources/work-location.form.status'))
                     ->required(),
+                Section::make('Mobile check-in geofence')
+                    ->description('Employees assigned to this workplace can check in from their phone only while inside this circle. Enter the coordinates of the workplace centre (for example, right-click the spot on any map and copy the coordinates). Browser location can be spoofed on a tampered phone, so flagged check-ins are reviewed by HR rather than blindly trusted.')
+                    ->columnSpanFull()
+                    ->columns(2)
+                    ->visible(fn (Get $get): bool => ! in_array($get('location_type'), [WorkLocationEnum::Home, WorkLocationEnum::Home->value], true))
+                    ->disabled(fn (): bool => ! Auth::user()?->can(HrPermissions::ManageAttendanceGeofences))
+                    ->schema([
+                        Toggle::make('geofence_enabled')
+                            ->label('Enable mobile check-in for this workplace')
+                            ->live()
+                            ->columnSpanFull(),
+                        TextInput::make('latitude')
+                            ->numeric()
+                            ->minValue(-90)
+                            ->maxValue(90)
+                            ->step(0.0000001)
+                            ->required(fn (Get $get): bool => (bool) $get('geofence_enabled')),
+                        TextInput::make('longitude')
+                            ->numeric()
+                            ->minValue(-180)
+                            ->maxValue(180)
+                            ->step(0.0000001)
+                            ->required(fn (Get $get): bool => (bool) $get('geofence_enabled')),
+                        TextInput::make('geofence_radius_meters')
+                            ->label('Allowed radius')
+                            ->integer()
+                            ->suffix('metres')
+                            ->minValue((int) config('hr_attendance_geofence.radius_min_meters'))
+                            ->maxValue((int) config('hr_attendance_geofence.radius_max_meters'))
+                            ->default((int) config('hr_attendance_geofence.default_radius_meters'))
+                            ->required(fn (Get $get): bool => (bool) $get('geofence_enabled'))
+                            ->helperText('Between '.config('hr_attendance_geofence.radius_min_meters').' and '.config('hr_attendance_geofence.radius_max_meters').' metres. Around 100-200 m suits a typical office; GPS is less precise indoors.'),
+                        View::make('employees::filament.components.use-my-location')->columnSpanFull(),
+                    ]),
             ]);
+    }
+
+    /** @return array<int, int> */
+    public static function accessibleCompanyIds(): array
+    {
+        $user = Auth::user();
+        if (! $user) {
+            return [];
+        }
+
+        return $user->allowedCompanies()->pluck('companies.id')
+            ->push((int) $user->default_company_id)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Work locations now hold GPS coordinates, so the list must be scoped to the
+     * user's default company or allowed companies.
+     */
+    public static function getEloquentQuery(): Builder
+    {
+        return parent::getEloquentQuery()
+            ->whereIn('company_id', self::accessibleCompanyIds());
     }
 
     public static function table(Table $table): Table
@@ -106,6 +176,16 @@ class WorkLocationResource extends Resource
                 IconColumn::make('is_active')
                     ->label(__('employees::filament/clusters/configurations/resources/work-location.table.columns.status'))
                     ->boolean(),
+                // Coordinates are deliberately NOT a column: the list shows only whether a
+                // geofence is on and how large it is.
+                IconColumn::make('geofence_enabled')
+                    ->label('Mobile check-in')
+                    ->boolean(),
+                TextColumn::make('geofence_radius_meters')
+                    ->label('Radius')
+                    ->suffix(' m')
+                    ->placeholder('—')
+                    ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('company.name')
                     ->label(__('employees::filament/clusters/configurations/resources/work-location.table.columns.company'))
                     ->sortable(),
@@ -284,7 +364,50 @@ class WorkLocationResource extends Resource
                 IconEntry::make('is_active')
                     ->boolean()
                     ->label(__('employees::filament/clusters/configurations/resources/work-location.infolist.status')),
+                IconEntry::make('geofence_enabled')
+                    ->boolean()
+                    ->label('Mobile check-in'),
+                TextEntry::make('latitude')
+                    ->placeholder('—')
+                    ->suffixAction(
+                        Action::make('open_in_osm')
+                            ->label('OpenStreetMap')
+                            ->icon('heroicon-o-arrow-top-right-on-square')
+                            ->url(fn (?WorkLocation $record): ?string => ($record?->latitude && $record?->longitude)
+                                ? "https://www.openstreetmap.org/?mlat={$record->latitude}&mlon={$record->longitude}#map=18/{$record->latitude}/{$record->longitude}"
+                                : null
+                            )
+                            ->openUrlInNewTab()
+                            ->visible(fn (?WorkLocation $record): bool => $record?->latitude !== null && $record?->longitude !== null)
+                    )
+                    ->visible(fn (): bool => self::canSeeCoordinates()),
+                TextEntry::make('longitude')
+                    ->placeholder('—')
+                    ->visible(fn (): bool => self::canSeeCoordinates()),
+                TextEntry::make('geofence_radius_meters')
+                    ->label('Allowed radius')
+                    ->suffix(' m')
+                    ->placeholder('—')
+                    ->visible(fn (): bool => self::canSeeCoordinates()),
+                TextEntry::make('openstreetmap_link')
+                    ->label('Map')
+                    ->state(fn (?WorkLocation $record): string => ($record?->latitude && $record?->longitude) ? 'View on OpenStreetMap' : '—')
+                    ->url(fn (?WorkLocation $record): ?string => ($record?->latitude && $record?->longitude)
+                        ? "https://www.openstreetmap.org/?mlat={$record->latitude}&mlon={$record->longitude}#map=18/{$record->latitude}/{$record->longitude}"
+                        : null
+                    )
+                    ->openUrlInNewTab()
+                    ->icon('heroicon-o-arrow-top-right-on-square')
+                    ->visible(fn (?WorkLocation $record): bool => self::canSeeCoordinates() && $record?->latitude !== null && $record?->longitude !== null),
             ]);
+    }
+
+    private static function canSeeCoordinates(): bool
+    {
+        $user = Auth::user();
+
+        return $user !== null
+            && ($user->can(HrPermissions::ManageAttendanceGeofences) || $user->can(HrPermissions::ViewAttendanceLocationEvidence));
     }
 
     public static function getPages(): array

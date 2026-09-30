@@ -75,6 +75,7 @@ use Webkul\Employee\Filament\Resources\EmployeeResource\Pages\ManageSkill;
 use Webkul\Employee\Filament\Resources\EmployeeResource\Pages\ViewEmployee;
 use Webkul\Employee\Filament\Resources\EmployeeResource\RelationManagers\ResumeRelationManager;
 use Webkul\Employee\Filament\Resources\EmployeeResource\RelationManagers\SkillsRelationManager;
+use Webkul\Employee\Filament\Resources\EmployeeResource\RelationManagers\WorkLocationAssignmentsRelationManager;
 use Webkul\Employee\Models\Employee;
 use Webkul\Employee\Services\EmployeeSensitiveChangeService;
 use Webkul\Employee\Services\HrHierarchyService;
@@ -1979,6 +1980,10 @@ class EmployeeResource extends Resource
                 ResumeRelationManager::class,
             ])
                 ->icon('heroicon-o-clipboard-document-list'),
+            RelationGroup::make('Work Locations', [
+                WorkLocationAssignmentsRelationManager::class,
+            ])
+                ->icon('heroicon-o-map-pin'),
         ];
 
         return $relations;

@@ -3,6 +3,8 @@
 namespace Webkul\Employee;
 
 use Filament\Panel;
+use Webkul\Employee\Services\Attendance\Verifiers\GpsGeofenceVerifier;
+use Webkul\Employee\Services\Attendance\Verifiers\RemoteExemptVerifier;
 use Webkul\PluginManager\Console\Commands\InstallCommand;
 use Webkul\PluginManager\Console\Commands\UninstallCommand;
 use Webkul\PluginManager\Package;
@@ -51,6 +53,10 @@ class EmployeeServiceProvider extends PackageServiceProvider
                 // migrated manually at the time it was written.
                 '2026_09_16_000001_add_claim_fields_to_employees_requests_table',
                 '2026_09_24_123304_add_unique_constraints_to_employees_identity_fields',
+                '2026_09_30_100001_add_geofence_columns_to_employees_work_locations_table',
+                '2026_09_30_100002_create_employees_employee_work_location_assignments_table',
+                '2026_09_30_100003_create_employees_attendance_verifications_table',
+                '2026_09_30_100004_add_verification_columns_to_employees_attendance_records_table',
             ])
             ->runsMigrations()
             ->hasSeeder('Webkul\\Employee\\Database\Seeders\\DatabaseSeeder')
@@ -70,6 +76,11 @@ class EmployeeServiceProvider extends PackageServiceProvider
 
     public function packageRegistered(): void
     {
+        $this->app->tag([
+            GpsGeofenceVerifier::class,
+            RemoteExemptVerifier::class,
+        ], 'attendance.verifiers');
+
         Panel::configureUsing(function (Panel $panel): void {
             $panel->plugin(EmployeePlugin::make());
         });

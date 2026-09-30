@@ -3,8 +3,14 @@
 namespace Webkul\Employee;
 
 use Filament\Contracts\Plugin;
+use Filament\Navigation\NavigationItem;
 use Filament\Panel;
+use Illuminate\Support\Facades\Auth;
+use Webkul\Employee\Filament\Clusters\Configurations\Resources\WorkLocationResource;
+use Webkul\Employee\Filament\Resources\AttendanceRecordResource;
+use Webkul\Employee\Support\HrPermissions;
 use Webkul\PluginManager\Package;
+use Webkul\Support\Enums\NavigationGroup;
 
 class EmployeePlugin implements Plugin
 {
@@ -42,8 +48,37 @@ class EmployeePlugin implements Plugin
                     ->discoverClusters(
                         in: __DIR__.'/Filament/Widgets',
                         for: 'Webkul\\Employee\\Filament\\Widgets'
-                    );
+                    )
+                    ->navigationItems($this->attendanceNavigationItems());
             });
+    }
+
+    /**
+     * HR-side shortcuts in the Attendance section, mirroring how Time Off groups
+     * "My Time" (employee) and "Management" (HR). The workplace / geofence
+     * screen itself stays in Employees -> Configurations; this only links to it.
+     *
+     * @return array<int, NavigationItem>
+     */
+    protected function attendanceNavigationItems(): array
+    {
+        return [
+            NavigationItem::make('Needs Review')
+                ->group(NavigationGroup::Attendance)
+                ->icon('heroicon-o-exclamation-triangle')
+                ->sort(20)
+                ->url(fn (): string => AttendanceRecordResource::getUrl('index', [
+                    'filters' => ['verification_status' => ['value' => 'needs_review']],
+                ]))
+                ->visible(fn (): bool => (bool) Auth::user()?->can(HrPermissions::ReviewAttendanceVerifications)
+                    && AttendanceRecordResource::canViewAny()),
+            NavigationItem::make('Workplaces & Geofences')
+                ->group(NavigationGroup::Attendance)
+                ->icon('heroicon-o-map')
+                ->sort(30)
+                ->url(fn (): string => WorkLocationResource::getUrl('index'))
+                ->visible(fn (): bool => (bool) Auth::user()?->can('view_any_employee_work::location')),
+        ];
     }
 
     public function boot(Panel $panel): void

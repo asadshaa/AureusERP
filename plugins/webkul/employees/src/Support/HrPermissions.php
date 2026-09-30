@@ -38,6 +38,15 @@ final class HrPermissions
      */
     public const ViewAttendance = 'hr_view_attendance';
 
+    /** Configure workplace coordinates/radius for browser GPS attendance. */
+    public const ManageAttendanceGeofences = 'hr_manage_attendance_geofences';
+
+    /** See raw latitude/longitude/IP/user-agent evidence behind an attendance verification. */
+    public const ViewAttendanceLocationEvidence = 'hr_view_attendance_location_evidence';
+
+    /** Approve/reject GPS attendance flagged for review. */
+    public const ReviewAttendanceVerifications = 'hr_review_attendance_verifications';
+
     /** Same gap, same fix, for PerformanceCycleResource/PerformanceReviewResource (both gated on ManagePerformance alone). */
     public const ViewPerformance = 'hr_view_performance';
 
@@ -63,6 +72,9 @@ final class HrPermissions
             self::ViewAttendance,
             self::ViewPerformance,
             self::ViewEmployeeRequestTypes,
+            self::ManageAttendanceGeofences,
+            self::ViewAttendanceLocationEvidence,
+            self::ReviewAttendanceVerifications,
             // Added for the HR-roles work: Administrator/Manager/Officer/
             // Recruiter/Hiring-Manager/Auditor all need slices of these
             // config-CRUD resources, and the registrar can only grant a
@@ -147,6 +159,9 @@ final class HrPermissions
             self::ManagePerformance,
             self::ManageEmployeeRequests,
             self::ViewAnalytics,
+            // Line managers review their own reports' flagged attempts, but do
+            // NOT get ViewAttendanceLocationEvidence (raw coordinates/IP).
+            self::ReviewAttendanceVerifications,
             'view_any_support_approval::request', 'view_support_approval::request',
             // ApproveLeave ('hr_approve_leave') only governs submitting a
             // leave request on someone else's behalf -- it does NOT gate
@@ -175,6 +190,7 @@ final class HrPermissions
         return [
             self::ManageEmployeeRequests,
             self::ManageTeams,
+            self::ManageAttendanceGeofences,
             'view_any_employee_department', 'view_employee_department', 'create_employee_department', 'update_employee_department', 'delete_employee_department',
             'view_any_recruitment_department', 'view_recruitment_department', 'create_recruitment_department', 'update_recruitment_department',
             'view_any_employee_job::position', 'view_employee_job::position', 'create_employee_job::position', 'update_employee_job::position', 'delete_employee_job::position',
@@ -221,6 +237,9 @@ final class HrPermissions
             self::ManageAttendance,
             self::ManageEmployeeRequests,
             self::ViewAnalytics,
+            self::ManageAttendanceGeofences,
+            self::ViewAttendanceLocationEvidence,
+            self::ReviewAttendanceVerifications,
             'view_any_employee_employee', 'view_employee_employee', 'create_employee_employee', 'update_employee_employee',
             'view_any_employee_department', 'view_employee_department',
             'view_any_employee_job::position', 'view_employee_job::position',
@@ -324,6 +343,7 @@ final class HrPermissions
             self::ViewSensitiveEmployeeData,
             self::ViewAnalytics,
             self::ViewAttendance,
+            self::ViewAttendanceLocationEvidence,
             self::ViewPerformance,
             self::ViewEmployeeRequestTypes,
             'view_any_employee_employee', 'view_employee_employee',

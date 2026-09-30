@@ -18,11 +18,21 @@ use Filament\Schemas\Schema;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
+use InvalidArgumentException;
 use RuntimeException;
+use Webkul\Employee\Enums\AttendanceSource;
+use Webkul\Employee\Enums\AttendanceVerificationStatus;
 use Webkul\Employee\Filament\Resources\AttendanceRecordResource\Pages\ManageAttendanceRecords;
 use Webkul\Employee\Models\AttendanceRecord;
+use Webkul\Employee\Models\AttendanceVerification;
+use Webkul\Employee\Services\Attendance\AttendanceScheduleResolver;
+use Webkul\Employee\Services\Attendance\GeofencedAttendanceService;
 use Webkul\Employee\Services\EmployeeRequestService;
 use Webkul\Employee\Services\HrHierarchyService;
 use Webkul\Employee\Support\HrPermissions;
@@ -38,12 +48,17 @@ class AttendanceRecordResource extends Resource
 
     public static function getNavigationGroup(): string|\UnitEnum
     {
-        return NavigationGroup::Employee;
+        return NavigationGroup::Attendance;
     }
 
     public static function getNavigationLabel(): string
     {
-        return 'Attendance';
+        return 'Attendance Register';
+    }
+
+    public static function getModelLabel(): string
+    {
+        return 'attendance record';
     }
 
     public static function form(Schema $schema): Schema
@@ -59,22 +74,116 @@ class AttendanceRecordResource extends Resource
                     return $query->where('company_id', $companyId)->whereIn('id', $visible);
                 })
                 ->required()->searchable()->preload(),
-            DatePicker::make('attendance_date')->required()->native(false),
+            DatePicker::make('attendance_date')->required()->native(false)
+                ->minDate(fn (): string => now()->subYears(2)->toDateString())
+                ->maxDate(fn (): string => now()->addYear()->toDateString()),
             DateTimePicker::make('scheduled_start')->seconds(false),
-            DateTimePicker::make('scheduled_end')->seconds(false),
+            DateTimePicker::make('scheduled_end')->seconds(false)->after('scheduled_start'),
             DateTimePicker::make('check_in')->seconds(false),
-            DateTimePicker::make('check_out')->seconds(false),
+            // An overnight shift simply has a check-out on the next date; a check-out
+            // before the check-in is always a data-entry mistake (it used to be saved
+            // silently with 0 worked hours).
+            DateTimePicker::make('check_out')->seconds(false)->after('check_in')
+                ->validationMessages(['after' => 'The check-out must be after the check-in.']),
             TextInput::make('overtime_hours')->numeric()->minValue(0)->default(0),
             Select::make('status')->options([
                 'present' => 'Present', 'absent' => 'Absent', 'leave' => 'Leave',
                 'holiday' => 'Holiday', 'remote' => 'Remote',
             ])->default('present')->required(),
-            Select::make('source')->options([
-                'manual' => 'Manual', 'import' => 'Import', 'biometric' => 'Biometric', 'api' => 'API',
-            ])->default('manual')->required(),
-            TextInput::make('source_reference')->maxLength(255),
+            // GPS / self-service rows are backed by verification evidence. They can
+            // only be created by the check-in flow, never picked by hand, and the
+            // label on an existing one cannot be changed.
+            Select::make('source')
+                ->options(fn (?AttendanceRecord $record): array => self::isEvidenceBacked($record)
+                    ? AttendanceSource::options()
+                    : Arr::except(AttendanceSource::options(), AttendanceSource::evidenceBacked()))
+                ->disabled(fn (?AttendanceRecord $record): bool => self::isEvidenceBacked($record))
+                ->dehydrated(fn (?AttendanceRecord $record): bool => ! self::isEvidenceBacked($record))
+                ->default('manual')
+                ->required(),
+            TextInput::make('source_reference')->maxLength(255)
+                ->disabled(fn (?AttendanceRecord $record): bool => self::isEvidenceBacked($record))
+                ->dehydrated(fn (?AttendanceRecord $record): bool => ! self::isEvidenceBacked($record)),
+            Textarea::make('correction_reason')
+                ->label('Reason for correcting this GPS-verified attendance')
+                ->helperText('Required. Recorded with the before/after times in the verification audit trail.')
+                ->minLength(10)
+                ->visible(fn (?AttendanceRecord $record): bool => self::isEvidenceBacked($record))
+                ->required(fn (?AttendanceRecord $record): bool => self::isEvidenceBacked($record))
+                ->columnSpanFull(),
             Textarea::make('notes')->columnSpanFull(),
         ])->columns(2);
+    }
+
+    private static function isEvidenceBacked(?AttendanceRecord $record): bool
+    {
+        return $record !== null && in_array($record->source, AttendanceSource::evidenceBacked(), true);
+    }
+
+    /** A user can never edit or delete their OWN evidence-backed attendance. */
+    private static function isOwnEvidenceBacked(AttendanceRecord $record): bool
+    {
+        return self::isEvidenceBacked($record)
+            && (int) $record->employee?->user_id === (int) Auth::id();
+    }
+
+    private static function canReviewRecord(AttendanceRecord $record): bool
+    {
+        if ($record->verification_status !== AttendanceVerificationStatus::NeedsReview->value) {
+            return false;
+        }
+
+        $pending = $record->verifications()->where('review_status', 'pending')->first();
+
+        return $pending !== null && (bool) Auth::user()?->can('review', $pending);
+    }
+
+    /**
+     * Applies an edit. Evidence-backed rows route their times through the
+     * service so the change is audited with a reason; everything else keeps
+     * the original plain update.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private static function applyEdit(AttendanceRecord $record, array $data): AttendanceRecord
+    {
+        $reason = (string) Arr::pull($data, 'correction_reason', '');
+
+        if (! self::isEvidenceBacked($record)) {
+            $record->update($data);
+
+            return $record;
+        }
+
+        $times = Arr::only($data, ['check_in', 'check_out']);
+        $others = Arr::except($data, ['check_in', 'check_out']);
+
+        $changed = array_filter($times, function ($value, $key) use ($record): bool {
+            $current = $record->{$key}?->format('Y-m-d H:i:s');
+
+            return ($value !== null ? Carbon::parse($value)->format('Y-m-d H:i:s') : null) !== $current;
+        }, ARRAY_FILTER_USE_BOTH);
+
+        if ($changed !== []) {
+            app(GeofencedAttendanceService::class)->recordHrCorrection($record, Auth::user(), $changed, $reason);
+            $record->refresh();
+        }
+
+        if ($others !== []) {
+            $record->update($others);
+        }
+
+        return $record;
+    }
+
+    private static function attempt(callable $callback, string $successTitle): void
+    {
+        try {
+            $callback();
+            Notification::make()->success()->title($successTitle)->send();
+        } catch (AuthorizationException|InvalidArgumentException|RuntimeException $e) {
+            Notification::make()->danger()->title('Not saved')->body($e->getMessage())->send();
+        }
     }
 
     public static function table(Table $table): Table
@@ -89,13 +198,59 @@ class AttendanceRecordResource extends Resource
             TextColumn::make('late_minutes')->label('Late (minutes)')->sortable(),
             TextColumn::make('early_departure_minutes')->label('Early (minutes)')->sortable(),
             TextColumn::make('overtime_hours')->numeric(decimalPlaces: 2),
-            TextColumn::make('source')->badge(),
+            TextColumn::make('source')->badge()
+                ->formatStateUsing(fn (?string $state): string => AttendanceSource::tryFrom((string) $state)?->label() ?? (string) $state),
+            TextColumn::make('verification_status')
+                ->label('Verification')
+                ->badge()
+                ->placeholder('—')
+                ->formatStateUsing(fn (?string $state): ?string => AttendanceVerificationStatus::tryFrom((string) $state)?->getLabel())
+                ->color(fn (?string $state): ?string => AttendanceVerificationStatus::tryFrom((string) $state)?->getColor()),
         ])->filters([
             SelectFilter::make('status')->options([
                 'present' => 'Present', 'absent' => 'Absent', 'leave' => 'Leave',
                 'holiday' => 'Holiday', 'remote' => 'Remote',
             ]),
+            SelectFilter::make('verification_status')
+                ->label('Verification')
+                ->options(collect(AttendanceVerificationStatus::cases())->mapWithKeys(fn (AttendanceVerificationStatus $case): array => [$case->value => $case->getLabel()])->all()),
+            SelectFilter::make('source')->options(AttendanceSource::options()),
         ])->recordActions([
+            Action::make('verification_evidence')
+                ->label('Verification')
+                ->icon('heroicon-o-map-pin')
+                ->color('gray')
+                ->visible(fn (AttendanceRecord $record): bool => $record->verification_status !== null
+                    && (bool) Auth::user()?->can('viewAny', AttendanceVerification::class))
+                ->modalHeading('Verification evidence')
+                ->modalSubmitAction(false)
+                ->modalCancelActionLabel('Close')
+                ->modalContent(fn (AttendanceRecord $record) => view('employees::filament.components.attendance-verification-evidence', [
+                    'verifications' => $record->verifications()->with(['workLocation', 'reviewer', 'user'])->orderBy('server_recorded_at')->orderBy('id')->get()
+                        ->filter(fn (AttendanceVerification $verification): bool => (bool) Auth::user()?->can('view', $verification))
+                        ->values(),
+                    'timezone' => app(AttendanceScheduleResolver::class)->timezoneFor($record->employee),
+                ])),
+            Action::make('approve_verification')
+                ->label('Approve')
+                ->icon('heroicon-o-check-circle')
+                ->color('success')
+                ->visible(fn (AttendanceRecord $record): bool => self::canReviewRecord($record))
+                ->schema([Textarea::make('note')->label('Review note')->required()])
+                ->action(fn (AttendanceRecord $record, array $data) => self::attempt(
+                    fn () => app(GeofencedAttendanceService::class)->reviewVerification($record, Auth::user(), true, (string) $data['note']),
+                    'Verification approved',
+                )),
+            Action::make('reject_verification')
+                ->label('Reject')
+                ->icon('heroicon-o-x-circle')
+                ->color('danger')
+                ->visible(fn (AttendanceRecord $record): bool => self::canReviewRecord($record))
+                ->schema([Textarea::make('note')->label('Review note')->required()])
+                ->action(fn (AttendanceRecord $record, array $data) => self::attempt(
+                    fn () => app(GeofencedAttendanceService::class)->reviewVerification($record, Auth::user(), false, (string) $data['note']),
+                    'Verification rejected. The recorded times were not changed.',
+                )),
             Action::make('request_time_change')
                 ->label('Request Time Change')
                 ->icon('heroicon-o-clock')
@@ -125,8 +280,38 @@ class AttendanceRecordResource extends Resource
                         Notification::make()->danger()->title('Could not submit time change request')->body($e->getMessage())->send();
                     }
                 }),
-            EditAction::make(),
-            DeleteAction::make(),
+            EditAction::make()
+                ->visible(fn (AttendanceRecord $record): bool => ! self::isOwnEvidenceBacked($record))
+                ->using(function (AttendanceRecord $record, array $data, EditAction $action): AttendanceRecord {
+                    try {
+                        return self::applyEdit($record, $data);
+                    } catch (AuthorizationException|InvalidArgumentException|RuntimeException $e) {
+                        Notification::make()->danger()->title('Not saved')->body($e->getMessage())->send();
+                        $action->halt();
+                    }
+                }),
+            // Plain delete for manual/imported days (unchanged behaviour).
+            DeleteAction::make()
+                ->visible(fn (AttendanceRecord $record): bool => ! self::isEvidenceBacked($record)),
+            // GPS / self-service days: a reason is required and the deletion is
+            // audited (the verification evidence itself is kept).
+            Action::make('delete_verified_record')
+                ->label('Delete')
+                ->icon('heroicon-o-trash')
+                ->color('danger')
+                ->visible(fn (AttendanceRecord $record): bool => self::isEvidenceBacked($record)
+                    && ! self::isOwnEvidenceBacked($record)
+                    && (bool) Auth::user()?->can(HrPermissions::ManageAttendance))
+                ->requiresConfirmation()
+                ->modalHeading('Delete GPS-verified attendance')
+                ->modalDescription('The attendance day is removed, but its verification evidence and this deletion (with your reason) stay in the audit trail.')
+                ->schema([
+                    Textarea::make('reason')->label('Reason for deleting')->required()->minLength(10),
+                ])
+                ->action(fn (AttendanceRecord $record, array $data) => self::attempt(
+                    fn () => app(GeofencedAttendanceService::class)->deleteRecord($record, Auth::user(), (string) $data['reason']),
+                    'Attendance deleted. The evidence and your reason were kept in the audit trail.',
+                )),
         ])
             ->headerActions([CreateAction::make()]);
     }
@@ -154,6 +339,21 @@ class AttendanceRecordResource extends Resource
         $user = Auth::user();
 
         return $user !== null && ($user->can(HrPermissions::ManageAttendance) || $user->can(HrPermissions::ViewAttendance));
+    }
+
+    public static function canCreate(): bool
+    {
+        return (bool) Auth::user()?->can(HrPermissions::ManageAttendance);
+    }
+
+    public static function canEdit(Model $record): bool
+    {
+        return (bool) Auth::user()?->can(HrPermissions::ManageAttendance);
+    }
+
+    public static function canDelete(Model $record): bool
+    {
+        return (bool) Auth::user()?->can(HrPermissions::ManageAttendance);
     }
 
     public static function getPages(): array

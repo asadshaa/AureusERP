@@ -16,10 +16,12 @@ use Webkul\Account\Models\Journal;
 use Webkul\Account\Models\Move;
 use Webkul\Account\Models\MoveLine;
 use Webkul\Employee\Models\AttendanceRecord;
+use Webkul\Employee\Models\Employee;
 use Webkul\Employee\Models\EmployeeRequest;
 use Webkul\Employee\Models\EmployeeRequestType;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\ApprovalRequest;
+use Webkul\Support\Models\ApprovalWorkflow;
 use Webkul\Support\Services\ApprovalEngine;
 
 class EmployeeRequestService
@@ -121,6 +123,7 @@ class EmployeeRequestService
         if (! $requestType) {
             throw new RuntimeException('No active "Attendance Time Change" request type is configured for this company.');
         }
+        $this->assertAttendanceApproverExists($record->employee, $requestType);
 
         $original = [
             'check_in'  => $record->check_in?->toDateTimeString(),
@@ -145,6 +148,119 @@ class EmployeeRequestService
                     'attendance_record_id' => $record->id,
                     'original'             => $original,
                     'requested'            => $requested,
+                ],
+            ]);
+
+            $this->submit($request, $requester);
+
+            return $request->fresh(['approvalRequest', 'requestType']);
+        });
+    }
+
+    /**
+     * The attendance workflow routes to the employee's line manager, and the
+     * ApprovalEngine deliberately has no admin bypass. Without a line manager
+     * the request would sit pending forever with nobody able to act, so refuse
+     * it up front with a message that says what to fix.
+     */
+    private function assertAttendanceApproverExists(Employee $employee, EmployeeRequestType $requestType): void
+    {
+        $firstStep = ApprovalWorkflow::query()
+            ->where('company_id', $employee->company_id)
+            ->where('request_type', $requestType->approval_request_type)
+            ->where('is_active', true)
+            ->first()
+            ?->steps()
+            ->orderBy('sequence')
+            ->first();
+
+        if ($firstStep?->hierarchy_route !== 'requester_manager') {
+            return;
+        }
+
+        // Read the current parent_id rather than a possibly stale cached relation.
+        $managerUser = $employee->parent_id
+            ? Employee::query()->with('user')->find($employee->parent_id)?->user
+            : null;
+        if (! $managerUser) {
+            throw new RuntimeException('No line manager with a user account is set for this employee, so there is nobody to approve the request. Ask HR to set the line manager, or have HR correct the attendance directly.');
+        }
+    }
+
+    /**
+     * MISSED DAY: the employee has no attendance record at all for a past
+     * day (phone failure, geofence failure they cannot fix themselves).
+     * Same request type and line-manager approval as a time change; the
+     * record is created only when the request is APPROVED. Nothing is
+     * created on submission or rejection.
+     *
+     * @param  array{check_in?: ?string, check_out?: ?string}  $times
+     */
+    public function requestMissingAttendance(
+        Employee $employee,
+        User $requester,
+        string $attendanceDate,
+        array $times,
+        ?string $reason = null,
+    ): EmployeeRequest {
+        if ((int) $employee->user_id !== (int) $requester->id) {
+            $this->hierarchy->assertCanManage($requester, $employee);
+        }
+
+        $date = Carbon::parse($attendanceDate)->startOfDay();
+        if ($date->isFuture() || $date->lt(now()->subDays(30)->startOfDay())) {
+            throw new RuntimeException('A missed day can only be requested for the last 30 days.');
+        }
+
+        $exists = AttendanceRecord::query()
+            ->where('company_id', $employee->company_id)
+            ->where('employee_id', $employee->id)
+            ->where('attendance_date', $date->toDateString())
+            ->exists();
+        if ($exists) {
+            throw new RuntimeException('A record already exists for that day. Request a time change on it instead.');
+        }
+
+        $times = array_filter(
+            array_intersect_key($times, array_flip(['check_in', 'check_out'])),
+            fn ($value): bool => filled($value),
+        );
+        if (! array_key_exists('check_in', $times)) {
+            throw new RuntimeException('A missed-day request needs at least a check-in time.');
+        }
+
+        $requested = [
+            'check_in'  => Carbon::parse($times['check_in'])->toDateTimeString(),
+            'check_out' => isset($times['check_out']) ? Carbon::parse($times['check_out'])->toDateTimeString() : null,
+        ];
+        if ($requested['check_out'] !== null && $requested['check_out'] <= $requested['check_in']) {
+            throw new RuntimeException('Check-out must be after check-in.');
+        }
+
+        $requestType = EmployeeRequestType::query()
+            ->where('company_id', $employee->company_id)
+            ->where('code', 'attendance_time_change')
+            ->where('is_active', true)
+            ->first();
+        if (! $requestType) {
+            throw new RuntimeException('No active "Attendance Time Change" request type is configured for this company.');
+        }
+        $this->assertAttendanceApproverExists($employee, $requestType);
+
+        return DB::transaction(function () use ($employee, $requester, $requestType, $date, $requested, $reason): EmployeeRequest {
+            $request = EmployeeRequest::query()->create([
+                'company_id'      => $employee->company_id,
+                'employee_id'     => $employee->id,
+                'request_type_id' => $requestType->id,
+                'requested_by'    => $requester->id,
+                'title'           => 'Missed attendance for '.$date->toDateString(),
+                'description'     => $reason,
+                'status'          => 'draft',
+                'payload'         => [
+                    'kind'            => 'attendance_missing_day',
+                    'attendance_date' => $date->toDateString(),
+                    'original'        => ['check_in' => null, 'check_out' => null],
+                    'requested'       => $requested,
                 ],
             ]);
 
@@ -216,6 +332,13 @@ class EmployeeRequestService
     private function applyAttendanceTimeChange(EmployeeRequest $request): void
     {
         $payload = (array) $request->payload;
+
+        if (($payload['kind'] ?? null) === 'attendance_missing_day') {
+            $this->applyMissingAttendanceDay($request, $payload);
+
+            return;
+        }
+
         $record = AttendanceRecord::query()->find($payload['attendance_record_id'] ?? null);
         if (! $record || (int) $record->employee_id !== (int) $request->employee_id || (int) $record->company_id !== (int) $request->company_id) {
             report(new RuntimeException("Approved attendance time change request #{$request->id} could not locate a matching attendance record to apply."));
@@ -231,6 +354,43 @@ class EmployeeRequestService
 
         $updates['approved_by'] = $request->approvalRequest?->decisions?->last()?->actor_id;
         $record->update($updates);
+    }
+
+    /**
+     * Creates the attendance record for an APPROVED missed-day request. If a
+     * record appeared in the meantime, the requested times are applied to it
+     * like a time change instead of creating a duplicate.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    private function applyMissingAttendanceDay(EmployeeRequest $request, array $payload): void
+    {
+        $date = $payload['attendance_date'] ?? null;
+        $requested = (array) ($payload['requested'] ?? []);
+        if (! $date || empty($requested['check_in'])) {
+            report(new RuntimeException("Approved missed-day request #{$request->id} has no usable date or check-in."));
+
+            return;
+        }
+
+        $record = AttendanceRecord::query()
+            ->where('company_id', $request->company_id)
+            ->where('employee_id', $request->employee_id)
+            ->where('attendance_date', $date)
+            ->first() ?? new AttendanceRecord([
+                'company_id'      => $request->company_id,
+                'employee_id'     => $request->employee_id,
+                'attendance_date' => $date,
+                'status'          => 'present',
+                'source'          => 'manual',
+            ]);
+
+        $record->fill(array_filter([
+            'check_in'    => $requested['check_in'],
+            'check_out'   => $requested['check_out'] ?? null,
+            'approved_by' => $request->approvalRequest?->decisions?->last()?->actor_id,
+        ], fn ($value): bool => $value !== null));
+        $record->save();
     }
 
     /**

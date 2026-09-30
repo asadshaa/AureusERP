@@ -33,6 +33,12 @@
         <testsuite name="AccountingFeature">
             <directory>plugins/webkul/accounting/tests/Feature</directory>
         </testsuite>
+        <testsuite name="EmployeeFeature">
+            <directory>plugins/webkul/employees/tests/Feature</directory>
+        </testsuite>
+        <testsuite name="Feature">
+            <directory>tests/Feature</directory>
+        </testsuite>
     </testsuites>
     <source>
         <include>
@@ -56,5 +62,6 @@
         <env name="SESSION_DRIVER" value="array"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
         <env name="ACCOUNTING_DRIVE_SYNC_ENABLED" value="false" force="true"/>
+        <env name="HR_ATTENDANCE_HR_ONLY" value="false" force="true"/>
     </php>
 </phpunit>

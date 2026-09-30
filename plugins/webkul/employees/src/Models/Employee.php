@@ -288,6 +288,11 @@ class Employee extends Model
         return $this->belongsTo(User::class, 'leave_manager_id');
     }
 
+    public function workLocationAssignments(): HasMany
+    {
+        return $this->hasMany(EmployeeWorkLocationAssignment::class, 'employee_id');
+    }
+
     public function attendanceManager(): BelongsTo
     {
         return $this->belongsTo(User::class, 'attendance_manager_id');

@@ -38,4 +38,16 @@ class WorkLocationFactory extends Factory
             'is_active'       => true,
         ];
     }
+
+    /** An active office with a complete, enabled geofence. */
+    public function geofenced(float $latitude = 24.8607, float $longitude = 67.0011, int $radius = 150): static
+    {
+        return $this->state(fn (): array => [
+            'location_type'          => 'office',
+            'latitude'               => $latitude,
+            'longitude'              => $longitude,
+            'geofence_radius_meters' => $radius,
+            'geofence_enabled'       => true,
+        ]);
+    }
 }

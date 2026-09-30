@@ -71,3 +71,29 @@ Schedule::command('accounting:drive:sync-inbound')
     ->everyMinute()
     ->withoutOverlapping(5)
     ->onOneServer();
+
+/*
+|--------------------------------------------------------------------------
+| Geofenced attendance housekeeping
+|--------------------------------------------------------------------------
+|
+| hr:flag-forgotten-shifts puts GPS shifts that were never checked out
+| (older than hr_attendance_geofence.max_shift_hours) into the HR review
+| queue and notifies the line manager. It is idempotent -- a record is
+| flagged once -- so running it hourly only shortens how long a forgotten
+| shift goes unnoticed.
+|
+| hr:prune-attendance-evidence nulls precise coordinates/IP/user agent on
+| verifications older than evidence_retention_days, keeping the result,
+| distance and review trail.
+|
+*/
+Schedule::command('hr:flag-forgotten-shifts')
+    ->hourly()
+    ->withoutOverlapping(30)
+    ->onOneServer();
+
+Schedule::command('hr:prune-attendance-evidence')
+    ->dailyAt('02:30')
+    ->withoutOverlapping(60)
+    ->onOneServer();
