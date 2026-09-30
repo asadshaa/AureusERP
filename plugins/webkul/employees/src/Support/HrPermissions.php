@@ -114,6 +114,12 @@ final class HrPermissions
             'page_employee_hr_analytics',
             'page_recruitment_recruitments',
             'view_any_time_off_time::off', 'view_time_off_time::off', 'update_time_off_time::off',
+            // Company leave overview (calendar page + dashboard widgets). The widgets
+            // and page also require the Time Off management permission in code
+            // (Webkul\TimeOff\Services\LeaveOversight), so employees never see them.
+            'page_time_off_overview', 'widget_time_off_overview_calendar_widget', 'widget_time_off_leave_type_widget',
+            // Personal leave widgets: only ever show the viewer's own leave and balance.
+            'widget_time_off_calendar_widget', 'widget_time_off_my_time_off_widget',
             'view_any_time_off_leave::type', 'view_time_off_leave::type', 'create_time_off_leave::type', 'update_time_off_leave::type',
             'view_any_time_off_allocation', 'view_time_off_allocation', 'create_time_off_allocation', 'update_time_off_allocation',
             'view_any_time_off_accrual::plan', 'view_time_off_accrual::plan', 'create_time_off_accrual::plan', 'update_time_off_accrual::plan',
@@ -163,6 +169,8 @@ final class HrPermissions
             // NOT get ViewAttendanceLocationEvidence (raw coordinates/IP).
             self::ReviewAttendanceVerifications,
             'view_any_support_approval::request', 'view_support_approval::request',
+            // Their OWN leave on the dashboard (self-scoped widgets).
+            'widget_time_off_calendar_widget', 'widget_time_off_my_time_off_widget',
             // ApproveLeave ('hr_approve_leave') only governs submitting a
             // leave request on someone else's behalf -- it does NOT gate
             // the Time Off -> Management screen itself, which Filament
@@ -245,6 +253,9 @@ final class HrPermissions
             'view_any_employee_job::position', 'view_employee_job::position',
             'view_any_time_off_time::off', 'view_time_off_time::off', 'update_time_off_time::off',
             'view_any_time_off_allocation', 'view_time_off_allocation', 'create_time_off_allocation', 'update_time_off_allocation',
+            'page_time_off_overview', 'widget_time_off_overview_calendar_widget', 'widget_time_off_leave_type_widget',
+            // Personal leave widgets: only ever show the viewer's own leave and balance.
+            'widget_time_off_calendar_widget', 'widget_time_off_my_time_off_widget',
             'view_any_employee_employee::request', 'view_employee_employee::request',
             'page_employee_hr_analytics',
             'view_any_support_approval::request', 'view_support_approval::request',

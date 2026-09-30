@@ -18,11 +18,21 @@ use Webkul\FullCalendar\Filament\Actions\ViewAction;
 use Webkul\FullCalendar\Filament\Widgets\FullCalendarWidget;
 use Webkul\TimeOff\Enums\State;
 use Webkul\TimeOff\Models\Leave;
+use Webkul\TimeOff\Services\LeaveOversight;
 use Webkul\TimeOff\Traits\TimeOffHelper;
 
 class OverviewCalendarWidget extends FullCalendarWidget
 {
-    use HasWidgetShield;
+    use HasWidgetShield {
+        canView as shieldCanView;
+    }
+
+    /** Shows other people's leave: HR / managers only (see LeaveOversight). */
+    public static function canView(): bool
+    {
+        return static::shieldCanView() && LeaveOversight::canOversee();
+    }
+
     use TimeOffHelper;
 
     public Model|string|null $model = Leave::class;
@@ -152,6 +162,7 @@ class OverviewCalendarWidget extends FullCalendarWidget
 
         return Leave::query()
             ->where('company_id', $user?->default_company_id)
+            ->whereIn('employee_id', LeaveOversight::visibleEmployeeIds())
             ->where('request_date_from', '>=', $fetchInfo['start'])
             ->where('request_date_to', '<=', $fetchInfo['end'])
             ->with('holidayStatus')

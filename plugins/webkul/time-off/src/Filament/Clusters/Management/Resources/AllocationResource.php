@@ -427,6 +427,17 @@ class AllocationResource extends Resource
      * (the sibling "Management" resource this one sits beside) so the two
      * do not end up with mismatched visibility for equally personal data.
      */
+    /**
+     * The shared LeaveAllocationPolicy::viewAny also admits the employee-only
+     * "my allocation" permission (for My Time -> My Allocations), which put a
+     * Management menu in front of every employee. The Management screen is for
+     * people who manage allocations.
+     */
+    public static function canViewAny(): bool
+    {
+        return (bool) Auth::user()?->can('view_any_time_off_allocation');
+    }
+
     public static function getEloquentQuery(): Builder
     {
         $user = Auth::user();

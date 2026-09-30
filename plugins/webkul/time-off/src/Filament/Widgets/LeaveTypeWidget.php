@@ -8,10 +8,19 @@ use Filament\Widgets\ChartWidget;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Support\Facades\Auth;
 use Webkul\TimeOff\Models\Leave;
+use Webkul\TimeOff\Services\LeaveOversight;
 
 class LeaveTypeWidget extends ChartWidget
 {
-    use HasWidgetShield;
+    use HasWidgetShield {
+        canView as shieldCanView;
+    }
+
+    /** Company-wide leave statistics: HR / managers only (see LeaveOversight). */
+    public static function canView(): bool
+    {
+        return static::shieldCanView() && LeaveOversight::canOversee();
+    }
 
     public function getHeading(): string|Htmlable|null
     {
@@ -32,7 +41,8 @@ class LeaveTypeWidget extends ChartWidget
     protected function getData(): array
     {
         $query = Leave::query()
-            ->where('company_id', Auth::user()?->default_company_id);
+            ->where('company_id', Auth::user()?->default_company_id)
+            ->whereIn('employee_id', LeaveOversight::visibleEmployeeIds());
 
         if ($this->pageFilters['selectedCompanies'] ?? null) {
             $query->whereIn('company_id', $this->pageFilters['selectedCompanies']);
