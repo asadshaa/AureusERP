@@ -8,7 +8,6 @@ use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\DatePicker;
-use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\KeyValue;
@@ -16,6 +15,7 @@ use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\TimePicker;
 use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
@@ -367,7 +367,7 @@ class EmployeeRequestResource extends Resource
                     ->label('Approval Type')
                     ->relationship('requestType', 'name', modifyQueryUsing: fn (Builder $query): Builder => $query->where('company_id', $companyId)->where('is_active', true))
                     ->required()->searchable()->preload()->live()
-                    ->afterStateUpdated(function (Set $set, $state) {
+                    ->afterStateUpdated(function (Set $set, $state, Get $get) {
                         $set('nature_of_expense', null);
                         if (! $state) {
                             return;
@@ -380,6 +380,31 @@ class EmployeeRequestResource extends Resource
                             $set('tax_deduction_rate', null);
                             $set('income_tax_deduction', null);
                             $set('sales_tax_deduction', null);
+
+                            $date = $get('payload.attendance_date') ?: now()->toDateString();
+                            $set('payload.attendance_date', $date);
+                            $carbon = Carbon::parse($date);
+                            $set('payload.day_of_week', $carbon->format('l'));
+                            $set('payload.formatted_date', $carbon->format('d M Y'));
+
+                            $empId = $get('employee_id');
+                            if ($empId) {
+                                $existing = AttendanceRecord::query()
+                                    ->where('employee_id', $empId)
+                                    ->where('attendance_date', $date)
+                                    ->first();
+                                if ($existing) {
+                                    $set('payload.attendance_record_id', $existing->id);
+                                    $set('payload.original.check_in', $existing->check_in?->toDateTimeString());
+                                    $set('payload.original.check_out', $existing->check_out?->toDateTimeString());
+                                    if ($existing->check_in) {
+                                        $set('payload.requested_check_in_time', $existing->check_in->format('H:i'));
+                                    }
+                                    if ($existing->check_out) {
+                                        $set('payload.requested_check_out_time', $existing->check_out->format('H:i'));
+                                    }
+                                }
+                            }
                         }
                     }),
                 Placeholder::make('approval_type_display')
@@ -442,6 +467,12 @@ class EmployeeRequestResource extends Resource
                                     $set('payload.attendance_record_id', $existing->id);
                                     $set('payload.original.check_in', $existing->check_in?->toDateTimeString());
                                     $set('payload.original.check_out', $existing->check_out?->toDateTimeString());
+                                    if ($existing->check_in) {
+                                        $set('payload.requested_check_in_time', $existing->check_in->format('H:i'));
+                                    }
+                                    if ($existing->check_out) {
+                                        $set('payload.requested_check_out_time', $existing->check_out->format('H:i'));
+                                    }
                                 } else {
                                     $set('payload.attendance_record_id', null);
                                     $set('payload.original.check_in', null);
@@ -472,14 +503,29 @@ class EmployeeRequestResource extends Resource
                             return 'No attendance record found on this date (select "Missed Entire Day" if creating missing attendance).';
                         })
                         ->visible(fn (Get $get): bool => ($get('payload.kind') ?? 'time_change') === 'time_change' && filled($get('payload.attendance_date'))),
-                    DateTimePicker::make('payload.requested.check_in')
-                        ->label('Requested Check-In')
+                    TimePicker::make('payload.requested_check_in_time')
+                        ->label('Requested Check-In Time')
                         ->seconds(false)
-                        ->required($isAttendance),
-                    DateTimePicker::make('payload.requested.check_out')
-                        ->label('Requested Check-Out')
+                        ->required($isAttendance)
+                        ->formatStateUsing(function ($state, $record, Get $get) {
+                            if ($state) {
+                                return $state;
+                            }
+                            $full = $record?->payload['requested']['check_in'] ?? $get('payload.requested.check_in');
+
+                            return $full ? Carbon::parse($full)->format('H:i') : null;
+                        }),
+                    TimePicker::make('payload.requested_check_out_time')
+                        ->label('Requested Check-Out Time')
                         ->seconds(false)
-                        ->after('payload.requested.check_in'),
+                        ->formatStateUsing(function ($state, $record, Get $get) {
+                            if ($state) {
+                                return $state;
+                            }
+                            $full = $record?->payload['requested']['check_out'] ?? $get('payload.requested.check_out');
+
+                            return $full ? Carbon::parse($full)->format('H:i') : null;
+                        }),
                 ]),
 
             Select::make('currency_id')
@@ -488,8 +534,16 @@ class EmployeeRequestResource extends Resource
                 ->searchable()->preload()
                 ->visible($isFinancial)
                 ->required($isFinancial),
-            FileUpload::make('attachments')
-                ->multiple()->directory('employees/requests')->visibility('private')->columnSpanFull(),
+            Section::make('Attachments')
+                ->visible(fn (Get $get): bool => ! $isAttendance($get))
+                ->schema([
+                    FileUpload::make('attachments')
+                        ->label('Supporting Documents / Receipts')
+                        ->multiple()
+                        ->directory('employees/requests')
+                        ->visibility('private')
+                        ->columnSpanFull(),
+                ]),
             KeyValue::make('payload')
                 ->label('Additional request details')->columnSpanFull()
                 ->visible(fn (Get $get): bool => ! $isFinancial($get) && ! $isAttendance($get)),
@@ -561,6 +615,49 @@ class EmployeeRequestResource extends Resource
         $incomeTax = (float) ($get('income_tax_deduction') ?? 0);
         $salesTax = (float) ($get('sales_tax_deduction') ?? 0);
         $set('amount', round($billed - $incomeTax - $salesTax, 4));
+    }
+
+    public static function formatAttendancePayload(array $data): array
+    {
+        if (! isset($data['payload']) || ! is_array($data['payload'])) {
+            return $data;
+        }
+
+        $payload = $data['payload'];
+        $dateStr = $payload['attendance_date'] ?? null;
+
+        if ($dateStr) {
+            $carbonDate = Carbon::parse($dateStr);
+            $payload['day_of_week'] = $carbonDate->format('l');
+            $payload['formatted_date'] = $carbonDate->format('d M Y');
+
+            $inTime = $payload['requested_check_in_time'] ?? null;
+            $outTime = $payload['requested_check_out_time'] ?? null;
+
+            if ($inTime) {
+                $payload['requested']['check_in'] = Carbon::parse("{$dateStr} {$inTime}")->toDateTimeString();
+            } elseif (isset($payload['requested']['check_in']) && strlen($payload['requested']['check_in']) <= 8) {
+                $payload['requested']['check_in'] = Carbon::parse("{$dateStr} {$payload['requested']['check_in']}")->toDateTimeString();
+            }
+
+            if ($outTime) {
+                $outCarbon = Carbon::parse("{$dateStr} {$outTime}");
+                if ($inTime && $outCarbon->lt(Carbon::parse("{$dateStr} {$inTime}"))) {
+                    $outCarbon->addDay();
+                }
+                $payload['requested']['check_out'] = $outCarbon->toDateTimeString();
+            } elseif (isset($payload['requested']['check_out']) && strlen($payload['requested']['check_out']) <= 8) {
+                $outCarbon = Carbon::parse("{$dateStr} {$payload['requested']['check_out']}");
+                if (isset($payload['requested']['check_in']) && $outCarbon->lt(Carbon::parse($payload['requested']['check_in']))) {
+                    $outCarbon->addDay();
+                }
+                $payload['requested']['check_out'] = $outCarbon->toDateTimeString();
+            }
+        }
+
+        $data['payload'] = $payload;
+
+        return $data;
     }
 
     public static function table(Table $table): Table
@@ -815,15 +912,7 @@ class EmployeeRequestResource extends Resource
                     ->visible(fn (EmployeeRequest $record): bool => in_array($record->status, ['draft', 'rejected'], true)
                         || ($record->status === 'pending_approval' && static::isFinanceUser(Auth::user()))
                     )
-                    ->mutateFormDataUsing(function (array $data): array {
-                        if (isset($data['payload']['attendance_date'])) {
-                            $carbon = Carbon::parse($data['payload']['attendance_date']);
-                            $data['payload']['day_of_week'] = $carbon->format('l');
-                            $data['payload']['formatted_date'] = $carbon->format('d M Y');
-                        }
-
-                        return $data;
-                    })
+                    ->mutateFormDataUsing(fn (array $data): array => static::formatAttendancePayload($data))
                     ->after(function (EmployeeRequest $record): void {
                         if ($record->approval_request_id && $record->status === 'pending_approval') {
                             $record->approvalRequest?->update([
@@ -835,25 +924,13 @@ class EmployeeRequestResource extends Resource
             ])->headerActions([
                 CreateAction::make()
                     ->label('Save Draft')
-                    ->mutateFormDataUsing(function (array $data): array {
-                        if (isset($data['payload']['attendance_date'])) {
-                            $carbon = Carbon::parse($data['payload']['attendance_date']);
-                            $data['payload']['day_of_week'] = $carbon->format('l');
-                            $data['payload']['formatted_date'] = $carbon->format('d M Y');
-                        }
-
-                        return $data;
-                    }),
+                    ->mutateFormDataUsing(fn (array $data): array => static::formatAttendancePayload($data)),
                 Action::make('submit_new')
                     ->label('Submit')
                     ->icon('heroicon-o-paper-airplane')->color('primary')
                     ->schema(fn (): array => static::formComponents())
                     ->action(function (array $data): void {
-                        if (isset($data['payload']['attendance_date'])) {
-                            $carbon = Carbon::parse($data['payload']['attendance_date']);
-                            $data['payload']['day_of_week'] = $carbon->format('l');
-                            $data['payload']['formatted_date'] = $carbon->format('d M Y');
-                        }
+                        $data = static::formatAttendancePayload($data);
                         $record = EmployeeRequest::query()->create($data);
                         try {
                             $request = app(EmployeeRequestService::class)->submit($record, Auth::user());

@@ -4,6 +4,7 @@ namespace Webkul\Employee\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Webkul\Account\Models\Move;
 use Webkul\Employee\Services\EmployeeRequestService;
@@ -105,6 +106,35 @@ class EmployeeRequest extends Model
             $request->requested_by ??= Auth::id();
             $request->company_id ??= $request->employee?->company_id;
             $request->currency_id ??= $request->company?->currency_id;
+        });
+
+        static::saving(function (EmployeeRequest $model): void {
+            if (is_array($model->payload)) {
+                $payload = $model->payload;
+                $dateStr = $payload['attendance_date'] ?? null;
+                if ($dateStr) {
+                    $carbon = Carbon::parse($dateStr);
+                    if (empty($payload['day_of_week'])) {
+                        $payload['day_of_week'] = $carbon->format('l');
+                    }
+                    if (empty($payload['formatted_date'])) {
+                        $payload['formatted_date'] = $carbon->format('d M Y');
+                    }
+                    $inTime = $payload['requested_check_in_time'] ?? null;
+                    $outTime = $payload['requested_check_out_time'] ?? null;
+                    if ($inTime && empty($payload['requested']['check_in'])) {
+                        $payload['requested']['check_in'] = Carbon::parse("{$dateStr} {$inTime}")->toDateTimeString();
+                    }
+                    if ($outTime && empty($payload['requested']['check_out'])) {
+                        $outCarbon = Carbon::parse("{$dateStr} {$outTime}");
+                        if ($inTime && $outCarbon->lt(Carbon::parse("{$dateStr} {$inTime}"))) {
+                            $outCarbon->addDay();
+                        }
+                        $payload['requested']['check_out'] = $outCarbon->toDateTimeString();
+                    }
+                    $model->payload = $payload;
+                }
+            }
         });
     }
 }

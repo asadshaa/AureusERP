@@ -14,9 +14,12 @@ use Webkul\Employee\Enums\AttendanceVerificationResult as Result;
 use Webkul\Employee\Enums\AttendanceVerificationStatus as Status;
 use Webkul\Employee\Filament\Pages\MyAttendance;
 use Webkul\Employee\Filament\Resources\AttendanceRecordResource\Pages\ManageAttendanceRecords;
+use Webkul\Employee\Filament\Resources\EmployeeRequestResource;
 use Webkul\Employee\Filament\Resources\EmployeeRequestResource\Pages\ManageEmployeeRequests;
 use Webkul\Employee\Models\AttendanceRecord;
 use Webkul\Employee\Models\AttendanceVerification;
+use Webkul\Employee\Models\EmployeeRequest;
+use Webkul\Employee\Models\EmployeeRequestType;
 use Webkul\Employee\Services\EmployeeRequestService;
 use Webkul\Employee\Support\HrPermissions;
 use Webkul\Recruitment\Filament\Widgets\ApplicantChartWidget;
@@ -318,4 +321,60 @@ it('sends complete notification with employee, what, day of week, date, times, a
         ->assertSee($f['employee']->name)
         ->assertSee('04 Oct 2026 (Sunday)')
         ->assertSee('In: 04:00 → 03:30');
+});
+
+it('formats attendance request from simple date and time pickers without re-selecting date', function () {
+    $f = geoFixture();
+
+    // 1. Test formatAttendancePayload synthesizes full datetimes from date and time pickers
+    $formData = [
+        'payload' => [
+            'attendance_date'          => '2026-10-06',
+            'requested_check_in_time'  => '08:45',
+            'requested_check_out_time' => '17:15',
+        ],
+    ];
+
+    $formatted = EmployeeRequestResource::formatAttendancePayload($formData);
+    expect($formatted['payload']['day_of_week'])->toBe('Tuesday')
+        ->and($formatted['payload']['formatted_date'])->toBe('06 Oct 2026')
+        ->and($formatted['payload']['requested']['check_in'])->toBe('2026-10-06 08:45:00')
+        ->and($formatted['payload']['requested']['check_out'])->toBe('2026-10-06 17:15:00');
+
+    // 2. Overnight shift test (check-out time < check-in time rolls to next day)
+    $overnightData = [
+        'payload' => [
+            'attendance_date'          => '2026-10-06',
+            'requested_check_in_time'  => '22:00',
+            'requested_check_out_time' => '06:00',
+        ],
+    ];
+    $overnightFormatted = EmployeeRequestResource::formatAttendancePayload($overnightData);
+    expect($overnightFormatted['payload']['requested']['check_in'])->toBe('2026-10-06 22:00:00')
+        ->and($overnightFormatted['payload']['requested']['check_out'])->toBe('2026-10-07 06:00:00');
+
+    // 3. Test saving an EmployeeRequest with time picker payload auto-populates datetimes via model saving hook
+    $requestType = EmployeeRequestType::firstOrCreate([
+        'company_id' => $f['company']->id,
+        'code'       => 'attendance_time_change',
+    ], [
+        'name'      => 'Attendance Time Change',
+        'category'  => 'attendance_correction',
+        'is_active' => true,
+    ]);
+
+    $req = EmployeeRequest::create([
+        'company_id'      => $f['company']->id,
+        'employee_id'     => $f['employee']->id,
+        'request_type_id' => $requestType->id,
+        'title'           => 'Correction for Tuesday',
+        'payload'         => [
+            'attendance_date'          => '2026-10-06',
+            'requested_check_in_time'  => '09:15',
+            'requested_check_out_time' => '18:30',
+        ],
+    ]);
+
+    expect($req->fresh()->payload['requested']['check_in'])->toBe('2026-10-06 09:15:00')
+        ->and($req->fresh()->payload['requested']['check_out'])->toBe('2026-10-06 18:30:00');
 });
