@@ -67,10 +67,12 @@ Artisan::command('inspire', function () {
 | somehow slow.
 |
 */
-Schedule::command('accounting:drive:sync-inbound')
-    ->everyMinute()
-    ->withoutOverlapping(5)
-    ->onOneServer();
+if (config('accounting_drive.enabled')) {
+    Schedule::command('accounting:drive:sync-inbound')
+        ->everyMinute()
+        ->withoutOverlapping(5)
+        ->onOneServer();
+}
 
 /*
 |--------------------------------------------------------------------------
@@ -91,6 +93,11 @@ Schedule::command('accounting:drive:sync-inbound')
 Schedule::command('hr:flag-forgotten-shifts')
     ->hourly()
     ->withoutOverlapping(30)
+    ->onOneServer();
+
+Schedule::command('hr:notify-shift-completion')
+    ->everyFifteenMinutes()
+    ->withoutOverlapping(10)
     ->onOneServer();
 
 Schedule::command('hr:prune-attendance-evidence')

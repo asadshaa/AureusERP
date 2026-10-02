@@ -108,6 +108,7 @@ final class HrPermissions
             // the real browser, because neither role held this. The real
             // Finance roles (controller/vp_finance) already had it.
             'view_any_support_approval::request', 'view_support_approval::request',
+            'view_any_support_calendar', 'view_support_calendar', 'create_support_calendar', 'update_support_calendar', 'delete_support_calendar',
             'view_any_employee_attendance::record', 'view_employee_attendance::record',
             'view_any_employee_performance::cycle', 'view_employee_performance::cycle', 'create_employee_performance::cycle', 'update_employee_performance::cycle',
             'view_any_employee_performance::review', 'view_employee_performance::review', 'create_employee_performance::review', 'update_employee_performance::review',
@@ -222,6 +223,7 @@ final class HrPermissions
             'view_any_recruitment_applicant::category', 'view_recruitment_applicant::category',
             'view_any_recruitment_u::t::m::medium', 'view_recruitment_u::t::m::medium',
             'view_any_recruitment_u::t::m::source', 'view_recruitment_u::t::m::source',
+            'view_any_support_calendar', 'view_support_calendar', 'create_support_calendar', 'update_support_calendar', 'delete_support_calendar',
         ];
     }
 
@@ -259,6 +261,7 @@ final class HrPermissions
             'view_any_employee_employee::request', 'view_employee_employee::request',
             'page_employee_hr_analytics',
             'view_any_support_approval::request', 'view_support_approval::request',
+            'view_any_support_calendar', 'view_support_calendar', 'create_support_calendar', 'update_support_calendar', 'delete_support_calendar',
         ];
     }
 

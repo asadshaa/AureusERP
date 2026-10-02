@@ -3,6 +3,8 @@
 namespace Webkul\Employee\Filament\Resources;
 
 use Filament\Actions\Action;
+use Filament\Actions\BulkAction;
+use Filament\Actions\BulkActionGroup;
 use Filament\Actions\CreateAction;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
@@ -20,6 +22,7 @@ use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Carbon;
@@ -313,7 +316,102 @@ class AttendanceRecordResource extends Resource
                     'Attendance deleted. The evidence and your reason were kept in the audit trail.',
                 )),
         ])
-            ->headerActions([CreateAction::make()]);
+            ->headerActions([CreateAction::make()])
+            ->bulkActions([
+                BulkActionGroup::make([
+                    BulkAction::make('bulk_approve_verifications')
+                        ->label('Approve Selected')
+                        ->icon('heroicon-o-check-circle')
+                        ->color('success')
+                        ->requiresConfirmation()
+                        ->modalHeading('Approve selected attendance records')
+                        ->modalDescription('Only records that require review and match your permissions will be approved.')
+                        ->schema([
+                            Textarea::make('note')->label('Review note')->default('Bulk approved by HR')->required(),
+                        ])
+                        ->action(function (Collection $records, array $data): void {
+                            $user = Auth::user();
+                            $service = app(GeofencedAttendanceService::class);
+                            $approvedCount = 0;
+                            $skippedCount = 0;
+
+                            foreach ($records as $record) {
+                                if (! self::canReviewRecord($record)) {
+                                    $skippedCount++;
+
+                                    continue;
+                                }
+
+                                try {
+                                    $service->reviewVerification($record, $user, true, (string) $data['note']);
+                                    $approvedCount++;
+                                } catch (\Throwable) {
+                                    $skippedCount++;
+                                }
+                            }
+
+                            if ($approvedCount > 0) {
+                                Notification::make()
+                                    ->success()
+                                    ->title("Approved {$approvedCount} record(s)".($skippedCount > 0 ? " ({$skippedCount} skipped)" : ''))
+                                    ->send();
+                            } else {
+                                Notification::make()
+                                    ->warning()
+                                    ->title('No records were approved')
+                                    ->body($skippedCount > 0 ? "{$skippedCount} record(s) could not be reviewed." : '')
+                                    ->send();
+                            }
+                        })
+                        ->visible(fn (): bool => (bool) (Auth::user()?->can(HrPermissions::ManageAttendance) || Auth::user()?->can(HrPermissions::ReviewAttendanceVerifications))),
+
+                    BulkAction::make('bulk_reject_verifications')
+                        ->label('Reject Selected')
+                        ->icon('heroicon-o-x-circle')
+                        ->color('danger')
+                        ->requiresConfirmation()
+                        ->modalHeading('Reject selected attendance records')
+                        ->modalDescription('Only records that require review and match your permissions will be rejected.')
+                        ->schema([
+                            Textarea::make('note')->label('Review note')->required(),
+                        ])
+                        ->action(function (Collection $records, array $data): void {
+                            $user = Auth::user();
+                            $service = app(GeofencedAttendanceService::class);
+                            $rejectedCount = 0;
+                            $skippedCount = 0;
+
+                            foreach ($records as $record) {
+                                if (! self::canReviewRecord($record)) {
+                                    $skippedCount++;
+
+                                    continue;
+                                }
+
+                                try {
+                                    $service->reviewVerification($record, $user, false, (string) $data['note']);
+                                    $rejectedCount++;
+                                } catch (\Throwable) {
+                                    $skippedCount++;
+                                }
+                            }
+
+                            if ($rejectedCount > 0) {
+                                Notification::make()
+                                    ->success()
+                                    ->title("Rejected {$rejectedCount} record(s)".($skippedCount > 0 ? " ({$skippedCount} skipped)" : ''))
+                                    ->send();
+                            } else {
+                                Notification::make()
+                                    ->warning()
+                                    ->title('No records were rejected')
+                                    ->body($skippedCount > 0 ? "{$skippedCount} record(s) could not be reviewed." : '')
+                                    ->send();
+                            }
+                        })
+                        ->visible(fn (): bool => (bool) (Auth::user()?->can(HrPermissions::ManageAttendance) || Auth::user()?->can(HrPermissions::ReviewAttendanceVerifications))),
+                ]),
+            ]);
     }
 
     /**

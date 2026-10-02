@@ -377,7 +377,17 @@ class EmployeeResource extends Resource
                                                 Fieldset::make(__('employees::filament/resources/employee.form.tabs.work-information.fields.schedule'))
                                                     ->schema([
                                                         Select::make('calendar_id')
-                                                            ->options(fn () => Calendar::pluck('name', 'id'))
+                                                            ->options(function () {
+                                                                $user = Auth::user();
+                                                                $companyId = (int) $user?->default_company_id;
+
+                                                                return Calendar::query()
+                                                                    ->where(function ($query) use ($companyId) {
+                                                                        $query->where('company_id', $companyId)
+                                                                            ->orWhereNull('company_id');
+                                                                    })
+                                                                    ->pluck('name', 'id');
+                                                            })
                                                             ->searchable()
                                                             ->preload()
                                                             ->live()

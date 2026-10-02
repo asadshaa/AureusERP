@@ -1,0 +1,15 @@
+Meezan Bank Limited - Account Statement
+Account Title,Truck It In (Pvt) Ltd,,,,,-18700.00
+Account Number,PLACEHOLDER-TIT-00000001,,,,,82100.00
+Statement Period,2026-10-02 to 2026-10-02,,,,,270600.00
+Currency,PKR,,,,,169800.00
+
+Transaction Date,Value Date,Description,Reference,Debit (PKR),Credit (PKR),Balance (PKR)
+2026-10-02,2026-10-02,Inward transfer - QA-Zeeshan Textiles - INV/2026/73,ZEESHAN-INV73-PMT,,100300.00,81600.00
+2026-10-02,2026-10-02,Outward transfer - QA-Al-Khair Fuel Station - BILL/2026/75,ALKHAIR-BILL75-PMT,53100.00,,28500.00
+2026-10-02,2026-10-02,Bank service charges - Sep 2026,BANKFEE-SEP26,500.00,,28000.00
+2026-10-02,2026-10-02,Funds transfer to Meezan Savings A/C,TRF-INTERNAL-001,20000.00,,8000.00
+2026-10-02,2026-10-02,Inward transfer - QA-Zeeshan Textiles - part payment,ZEESHAN-PARTIAL-002,,25000.00,33000.00
+2026-10-02,2026-10-02,Inward transfer - QA-Zeeshan Textiles - INV/2026/73,ZEESHAN-INV73-PMT,,100300.00,133300.00
+2026-10-02,2026-10-02,FUNDS RECEIVED,,,45000.00,178300.00
+2026-10-02,2026-10-02,POS Settlement - Merchant ID 88213-XX,POS-88213-XX,8500.00,,169800.00

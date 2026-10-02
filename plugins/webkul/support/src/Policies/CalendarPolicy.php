@@ -17,6 +17,10 @@ class CalendarPolicy
 
     public function view(User $user, Calendar $calendar): bool
     {
+        if ($calendar->company_id !== null && (int) $calendar->company_id !== (int) $user->default_company_id) {
+            return false;
+        }
+
         return $user->can('view_support_calendar');
     }
 
@@ -27,11 +31,19 @@ class CalendarPolicy
 
     public function update(User $user, Calendar $calendar): bool
     {
+        if ($calendar->company_id !== null && (int) $calendar->company_id !== (int) $user->default_company_id) {
+            return false;
+        }
+
         return $user->can('update_support_calendar');
     }
 
     public function delete(User $user, Calendar $calendar): bool
     {
+        if ($calendar->company_id !== null && (int) $calendar->company_id !== (int) $user->default_company_id) {
+            return false;
+        }
+
         return $user->can('delete_support_calendar');
     }
 

@@ -24,6 +24,7 @@ use Webkul\Employee\Services\Attendance\Data\LocationEvidence;
 use Webkul\Employee\Services\Attendance\GeofencedAttendanceService;
 use Webkul\Employee\Services\EmployeeRequestService;
 use Webkul\Employee\Support\HrPermissions;
+use Webkul\Support\Services\ApprovalEngine;
 
 beforeEach(function () {
     $this->service = app(GeofencedAttendanceService::class);
@@ -332,18 +333,49 @@ it('notifies the line manager when a check-in needs review, and not when it is v
     expect($f['managerUser']->notifications()->count())->toBe(1);
 });
 
-it('refuses a correction request when the employee has no line manager to approve it', function () {
+it('routes a correction and missed attendance request to HR when the employee has no line manager to approve it', function () {
     $f = geoFixture();
+    [$hrUser, $hrEmployee] = geoEmployee($f['company'], $f['location']);
+    geoGrant($hrUser, 'hr_manage_attendance', 'hr_view_all_records');
+
     $record = AttendanceRecord::query()->create([
         'company_id' => $f['company']->id, 'employee_id' => $f['employee']->id, 'attendance_date' => '2026-10-04',
         'check_in'   => '2026-10-04 04:00:00', 'status' => 'present', 'source' => 'manual',
     ]);
     $requests = app(EmployeeRequestService::class);
+    $engine = app(ApprovalEngine::class);
 
-    expect(fn () => $requests->requestAttendanceTimeChange($record, $f['user'], ['check_in' => '2026-10-04 03:30:00'], 'Badge reader down'))
-        ->toThrow(RuntimeException::class, 'No line manager');
-    expect(fn () => $requests->requestMissingAttendance($f['employee'], $f['user'], '2026-10-03', ['check_in' => '2026-10-03 04:00:00'], 'Phone died'))
-        ->toThrow(RuntimeException::class, 'No line manager');
+    // 1. Time change request succeeds and routes to HR
+    $timeChange = $requests->requestAttendanceTimeChange($record, $f['user'], ['check_in' => '2026-10-04 03:30:00'], 'Badge reader down');
+    expect($timeChange->status)->toBe('pending_approval')
+        ->and($engine->describeCurrentApprover($timeChange->approvalRequest))
+        ->toBe('Forwarded to HR (no line manager assigned).');
+
+    expect($engine->canAct($timeChange->approvalRequest, $f['user']))->toBeFalse()
+        ->and($engine->canAct($timeChange->approvalRequest, $hrUser))->toBeTrue();
+
+    $requests->approve($timeChange, $hrUser, 'Approved by HR');
+    expect($timeChange->fresh()->status)->toBe('approved')
+        ->and($record->fresh()->check_in->toTimeString())->toBe('03:30:00');
+
+    // 2. Missed attendance day succeeds and routes to HR
+    $missing = $requests->requestMissingAttendance(
+        $f['employee'],
+        $f['user'],
+        '2026-10-03',
+        ['check_in' => '2026-10-03 04:00:00', 'check_out' => '2026-10-03 12:00:00'],
+        'Phone died',
+    );
+    expect($missing->status)->toBe('pending_approval')
+        ->and($engine->describeCurrentApprover($missing->approvalRequest))
+        ->toBe('Forwarded to HR (no line manager assigned).');
+
+    expect($engine->canAct($missing->approvalRequest, $f['user']))->toBeFalse()
+        ->and($engine->canAct($missing->approvalRequest, $hrUser))->toBeTrue();
+
+    $requests->approve($missing, $hrUser, 'Approved by HR');
+    expect($missing->fresh()->status)->toBe('approved');
+    expect(AttendanceRecord::query()->where('employee_id', $f['employee']->id)->where('attendance_date', '2026-10-03')->exists())->toBeTrue();
 });
 
 it('still routes a correction request to the line manager when there is one', function () {

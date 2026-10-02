@@ -38,19 +38,23 @@ use Filament\Tables\Filters\QueryBuilder\Constraints\TextConstraint;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Filters\TernaryFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Auth;
+use Webkul\Support\Enums\NavigationGroup;
 use Webkul\Support\Filament\Resources\CalendarResource\Pages\CreateCalendar;
 use Webkul\Support\Filament\Resources\CalendarResource\Pages\EditCalendar;
 use Webkul\Support\Filament\Resources\CalendarResource\Pages\ListCalendars;
 use Webkul\Support\Filament\Resources\CalendarResource\Pages\ViewCalendar;
 use Webkul\Support\Filament\Resources\CalendarResource\RelationManagers\CalendarAttendance;
 use Webkul\Support\Models\Calendar;
-use Webkul\Support\Enums\NavigationGroup;
 
 class CalendarResource extends Resource
 {
     protected static ?string $model = Calendar::class;
 
-    protected static bool $shouldRegisterNavigation = false;
+    protected static bool $shouldRegisterNavigation = true;
+
+    protected static ?int $navigationSort = 40;
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedClock;
 
@@ -59,9 +63,9 @@ class CalendarResource extends Resource
         return __('support::filament/resources/calendar.title');
     }
 
-    public static function getNavigationGroup(): string | \UnitEnum
+    public static function getNavigationGroup(): string|\UnitEnum
     {
-        return NavigationGroup::Employee;
+        return NavigationGroup::Attendance;
     }
 
     public static function getNavigationLabel(): string
@@ -99,6 +103,7 @@ class CalendarResource extends Resource
                                         Select::make('company_id')
                                             ->label(__('support::filament/resources/calendar.form.sections.general.fields.company'))
                                             ->relationship('company', 'name')
+                                            ->default(fn (): ?int => Auth::user()?->default_company_id)
                                             ->searchable()
                                             ->preload(),
                                     ])->columns(2),
@@ -417,5 +422,21 @@ class CalendarResource extends Resource
             'view'   => ViewCalendar::route('/{record}'),
             'edit'   => EditCalendar::route('/{record}/edit'),
         ];
+    }
+
+    public static function getEloquentQuery(): Builder
+    {
+        $user = Auth::user();
+        if (! $user) {
+            return parent::getEloquentQuery();
+        }
+
+        $companyId = (int) $user->default_company_id;
+
+        return parent::getEloquentQuery()
+            ->where(function (Builder $query) use ($companyId): void {
+                $query->where('company_id', $companyId)
+                    ->orWhereNull('company_id');
+            });
     }
 }

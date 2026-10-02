@@ -3,7 +3,10 @@
 require_once __DIR__.'/GeoTestHelpers.php';
 
 use Carbon\CarbonImmutable;
+use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Str;
+
+uses(DatabaseTransactions::class);
 use Webkul\Employee\Enums\AttendanceVerificationAction as Action;
 use Webkul\Employee\Enums\AttendanceVerificationResult as Result;
 use Webkul\Employee\Models\AttendanceRecord;
@@ -331,9 +334,11 @@ it('refuses employees who are inactive, terminated or missing', function (array 
     expect($result->result)->toBe(Result::EmployeeNotEligible)->and($result->accepted)->toBeFalse();
     expect(geoRecords($f['employee']))->toHaveCount(0);
 })->with([
-    'inactive'   => [['is_active' => false]],
-    'terminated' => [['employment_status' => 'terminated']],
-    'suspended'  => [['employment_status' => 'suspended']],
+    'inactive'       => [['is_active' => false]],
+    'terminated'     => [['employment_status' => 'terminated']],
+    'suspended'      => [['employment_status' => 'suspended']],
+    'future_joining' => [['joining_date' => '2026-10-10']],
+    'past_leaving'   => [['leaving_date' => '2026-09-01']],
 ]);
 
 it('gives a user with no employee record nothing', function () {

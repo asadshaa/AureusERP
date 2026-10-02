@@ -9,6 +9,7 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Contracts\Container\Container;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -130,8 +131,26 @@ class GeofencedAttendanceService
 
     public function isEligible(Employee $employee): bool
     {
-        return (bool) $employee->is_active
-            && in_array($employee->employment_status ?? 'active', self::ELIGIBLE_STATUSES, true);
+        if (! (bool) $employee->is_active) {
+            return false;
+        }
+
+        if (! in_array($employee->employment_status ?? 'active', self::ELIGIBLE_STATUSES, true)) {
+            return false;
+        }
+
+        $today = now()->toDateString();
+
+        if ($employee->joining_date && $employee->joining_date->toDateString() > $today) {
+            return false;
+        }
+
+        $departure = $employee->departure_date ?? $employee->leaving_date;
+        if ($departure && Carbon::parse($departure)->toDateString() < $today) {
+            return false;
+        }
+
+        return true;
     }
 
     public function resolveEmployee(User $user): ?Employee
@@ -654,6 +673,35 @@ class GeofencedAttendanceService
             $parentId = $record->employee?->parent_id;
             $manager = $parentId ? Employee::query()->with('user')->find($parentId)?->user : null;
             if (! $manager || (int) $manager->id === (int) $record->employee?->user_id) {
+                // If there is no line manager, forward notification to company HR reviewers.
+                $hrUsers = User::query()
+                    ->where('default_company_id', $record->company_id)
+                    ->where('is_active', true)
+                    ->get()
+                    ->filter(fn (User $u): bool => $u->hasRole(['Admin', 'Super Admin', 'hr_manager', 'hr manager', 'hr_ops_manager', 'hr', 'human resources'])
+                        || $u->can('hr_manage_attendance')
+                        || $u->can('hr_review_attendance_verifications'));
+
+                if ($hrUsers->isEmpty()) {
+                    return;
+                }
+
+                $notification = FilamentNotification::make()
+                    ->warning()
+                    ->title("Attendance review: {$title}")
+                    ->body(sprintf(
+                        '%s (%s) %s [Forwarded to HR: no line manager assigned]',
+                        $record->employee->name,
+                        $record->attendance_date?->format('d M Y'),
+                        $what,
+                    ));
+
+                foreach ($hrUsers as $hrUser) {
+                    if ((int) $hrUser->id !== (int) $record->employee?->user_id) {
+                        $hrUser->notifyNow($notification->toDatabase());
+                    }
+                }
+
                 return;
             }
 
@@ -700,24 +748,62 @@ class GeofencedAttendanceService
 
         ['mode' => $mode, 'candidates' => $candidates] = $this->resolveMode($employee, $open ? $open->attendance_date->toDateString() : $attendanceDate);
 
+        $scheduleName = $employee->calendar?->name;
+        [$schedStartUtc, $schedEndUtc] = $this->schedule->scheduledWindowFor($employee, $attendanceDate);
+        $schedStartLocal = $schedStartUtc ? $this->localTime($schedStartUtc, $timezone) : null;
+        $schedEndLocal = $schedEndUtc ? $this->localTime($schedEndUtc, $timezone) : null;
+        $schedDurationHours = ($schedStartUtc && $schedEndUtc) ? round($schedStartUtc->diffInMinutes($schedEndUtc) / 60, 1) : 8.0;
+
+        $elapsedSeconds = 0;
+        $elapsedFormatted = null;
+        $progressPercent = 0;
+        $isShiftComplete = false;
+
         $state = 'not_checked_in';
         $worked = null;
         if ($open) {
             $state = 'checked_in';
+
+            if ($open->check_in) {
+                $elapsedSeconds = max(0, $nowUtc->getTimestamp() - $open->check_in->getTimestamp());
+                $elapsedHours = $elapsedSeconds / 3600;
+                $elapsedMinutes = intdiv($elapsedSeconds, 60);
+                $elapsedFormatted = intdiv($elapsedMinutes, 60).'h '.($elapsedMinutes % 60).'m';
+
+                $targetSeconds = ($schedDurationHours > 0 ? $schedDurationHours : 8.0) * 3600;
+                $progressPercent = min(100, (int) round(($elapsedSeconds / $targetSeconds) * 100));
+
+                $isShiftComplete = $elapsedHours >= 8.0 || ($schedEndUtc && $nowUtc >= $schedEndUtc);
+            }
         } elseif ($record?->check_in && $record->check_out) {
             $state = 'checked_out';
             $minutes = (int) $record->check_in->diffInMinutes($record->check_out);
             $worked = intdiv($minutes, 60).'h '.($minutes % 60).'m';
         }
 
+        $isPastStart = false;
+        if (! $open && ! ($record?->check_in) && $schedStartUtc) {
+            $isPastStart = $nowUtc > $schedStartUtc;
+        }
+
         return [
-            'state'     => $state,
-            'mode'      => $mode,
-            'check_in'  => $record?->check_in ? $this->localTime($record->check_in, $timezone) : null,
-            'check_out' => $record?->check_out ? $this->localTime($record->check_out, $timezone) : null,
-            'worked'    => $worked,
-            'location'  => $candidates->first()?->name,
-            'timezone'  => $timezone,
+            'state'              => $state,
+            'mode'               => $mode,
+            'check_in'           => $record?->check_in ? $this->localTime($record->check_in, $timezone) : null,
+            'check_out'          => $record?->check_out ? $this->localTime($record->check_out, $timezone) : null,
+            'worked'             => $worked,
+            'location'           => $candidates->first()?->name,
+            'timezone'           => $timezone,
+            'schedule_name'      => $scheduleName,
+            'scheduled_start'    => $schedStartLocal,
+            'scheduled_end'      => $schedEndLocal,
+            'scheduled_hours'    => $schedDurationHours,
+            'elapsed_seconds'    => $elapsedSeconds,
+            'elapsed_formatted'  => $elapsedFormatted,
+            'progress_percent'   => $progressPercent,
+            'is_shift_complete'  => $isShiftComplete,
+            'late_minutes'       => $record?->late_minutes ?? 0,
+            'is_past_start'      => $isPastStart,
         ];
     }
 

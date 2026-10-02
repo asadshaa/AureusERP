@@ -17,7 +17,23 @@ class HrHierarchyService
     {
         $this->assertCompanyAccess($user, $companyId);
 
-        if ($user->can('hr_view_all_records')) {
+        if (
+            $user->can('hr_view_all_records')
+            || $user->hasRole([
+                'Admin',
+                'Super Admin',
+                'hr',
+                'hr_manager',
+                'hr manager',
+                'hr_ops_manager',
+                'hr ops manager',
+                'hr operations manager',
+                'hr_administrator',
+                'hr administrator',
+                'human resources',
+                'human resources manager',
+            ])
+        ) {
             return Employee::query()->where('company_id', $companyId)->pluck('id');
         }
 

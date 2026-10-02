@@ -6,6 +6,7 @@ use Filament\Actions\Action;
 use Filament\Actions\CreateAction;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
+use Filament\Actions\ViewAction;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\KeyValue;
@@ -13,21 +14,29 @@ use Filament\Forms\Components\Placeholder;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
+use Filament\Infolists\Components\TextEntry;
 use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Component;
+use Filament\Schemas\Components\Grid;
+use Filament\Schemas\Components\Group;
 use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Get;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
+use Filament\Support\Enums\FontWeight;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use RuntimeException;
 use Webkul\Employee\Filament\Resources\EmployeeRequestResource\Pages\ManageEmployeeRequests;
+use Webkul\Employee\Models\AttendanceRecord;
+use Webkul\Employee\Models\Employee;
 use Webkul\Employee\Models\EmployeeRequest;
 use Webkul\Employee\Models\EmployeeRequestType;
 use Webkul\Employee\Services\EmployeeRequestService;
@@ -103,6 +112,213 @@ class EmployeeRequestResource extends Resource
     public static function form(Schema $schema): Schema
     {
         return $schema->components(static::formComponents());
+    }
+
+    public static function infolist(Schema $schema): Schema
+    {
+        return $schema
+            ->components([
+                Grid::make(['default' => 3])
+                    ->schema([
+                        Group::make([
+                            Section::make('Request & Attendance Details')
+                                ->schema([
+                                    TextEntry::make('requestType.name')
+                                        ->label('Request Type')
+                                        ->badge()
+                                        ->color(fn (EmployeeRequest $record): string => match ($record->requestType?->category) {
+                                            'attendance_correction' => 'info',
+                                            'financial'             => 'warning',
+                                            default                 => 'primary',
+                                        })
+                                        ->icon('heroicon-o-tag'),
+                                    TextEntry::make('title')
+                                        ->label('Title')
+                                        ->icon('heroicon-o-document-text'),
+                                    TextEntry::make('day_of_week')
+                                        ->label('Day of the Week')
+                                        ->getStateUsing(function (EmployeeRequest $record): ?string {
+                                            $payload = (array) ($record->payload ?? []);
+                                            if (! empty($payload['day_of_week'])) {
+                                                return $payload['day_of_week'];
+                                            }
+                                            $dateStr = $payload['attendance_date'] ?? null;
+                                            if (! $dateStr && isset($payload['attendance_record_id'])) {
+                                                $att = AttendanceRecord::find($payload['attendance_record_id']);
+                                                $dateStr = $att?->attendance_date?->toDateString();
+                                            }
+
+                                            return $dateStr ? Carbon::parse($dateStr)->format('l') : $record->created_at?->format('l');
+                                        })
+                                        ->badge()
+                                        ->color('primary')
+                                        ->icon('heroicon-o-calendar-days'),
+                                    TextEntry::make('target_date')
+                                        ->label('Attendance / Event Date')
+                                        ->getStateUsing(function (EmployeeRequest $record): ?string {
+                                            $payload = (array) ($record->payload ?? []);
+                                            $dateStr = $payload['attendance_date'] ?? null;
+                                            if (! $dateStr && isset($payload['attendance_record_id'])) {
+                                                $att = AttendanceRecord::find($payload['attendance_record_id']);
+                                                $dateStr = $att?->attendance_date?->toDateString();
+                                            }
+                                            if ($dateStr) {
+                                                return Carbon::parse($dateStr)->format('d F Y (l)');
+                                            }
+
+                                            return $record->created_at?->format('d F Y (l)');
+                                        })
+                                        ->icon('heroicon-o-calendar'),
+                                    TextEntry::make('check_in_comparison')
+                                        ->label('Check-In Time')
+                                        ->getStateUsing(function (EmployeeRequest $record): ?string {
+                                            $payload = (array) ($record->payload ?? []);
+                                            if (! isset($payload['requested']['check_in'])) {
+                                                return null;
+                                            }
+                                            $orig = ! empty($payload['original']['check_in'])
+                                                ? Carbon::parse($payload['original']['check_in'])->format('H:i:s (d M)')
+                                                : 'None (Missed)';
+                                            $req = Carbon::parse($payload['requested']['check_in'])->format('H:i:s (d M)');
+
+                                            return ($payload['kind'] ?? '') === 'attendance_missing_day'
+                                                ? "Requested: {$req}"
+                                                : "Original: {$orig} → Requested: {$req}";
+                                        })
+                                        ->visible(fn (EmployeeRequest $record): bool => isset($record->payload['requested']['check_in']))
+                                        ->icon('heroicon-o-arrow-right-end-on-rectangle'),
+                                    TextEntry::make('check_out_comparison')
+                                        ->label('Check-Out Time')
+                                        ->getStateUsing(function (EmployeeRequest $record): ?string {
+                                            $payload = (array) ($record->payload ?? []);
+                                            if (! array_key_exists('check_out', $payload['requested'] ?? [])) {
+                                                return null;
+                                            }
+                                            $orig = ! empty($payload['original']['check_out'])
+                                                ? Carbon::parse($payload['original']['check_out'])->format('H:i:s (d M)')
+                                                : 'None';
+                                            $req = ! empty($payload['requested']['check_out'])
+                                                ? Carbon::parse($payload['requested']['check_out'])->format('H:i:s (d M)')
+                                                : 'None';
+
+                                            return ($payload['kind'] ?? '') === 'attendance_missing_day'
+                                                ? "Requested: {$req}"
+                                                : "Original: {$orig} → Requested: {$req}";
+                                        })
+                                        ->visible(fn (EmployeeRequest $record): bool => isset($record->payload['requested']))
+                                        ->icon('heroicon-o-arrow-left-start-on-rectangle'),
+                                    TextEntry::make('description')
+                                        ->label('Reason / Employee Note')
+                                        ->placeholder('No reason provided')
+                                        ->icon('heroicon-o-chat-bubble-bottom-center-text')
+                                        ->columnSpanFull(),
+                                ])
+                                ->columns(2),
+
+                            Section::make('Financial Details')
+                                ->visible(fn (EmployeeRequest $record): bool => (bool) $record->requestType?->is_financial)
+                                ->schema([
+                                    TextEntry::make('billed_amount')->label('Claim/Budget')->money(fn ($record) => $record->currency?->code ?? 'PKR'),
+                                    TextEntry::make('tax_deduction_rate')->label('Tax Rate')->suffix('%')->placeholder('0%'),
+                                    TextEntry::make('income_tax_deduction')->label('Income Tax Deduction')->money(fn ($record) => $record->currency?->code ?? 'PKR'),
+                                    TextEntry::make('sales_tax_deduction')->label('Sales Tax Deduction')->money(fn ($record) => $record->currency?->code ?? 'PKR'),
+                                    TextEntry::make('amount')->label('Net Payable Amount')->money(fn ($record) => $record->currency?->code ?? 'PKR')->weight(FontWeight::Bold),
+                                    TextEntry::make('nature_of_expense')->label('Nature of Expense')->placeholder('—'),
+                                ])
+                                ->columns(2),
+                        ])->columnSpan(2),
+
+                        Group::make([
+                            Section::make('Who Sent The Request')
+                                ->schema([
+                                    TextEntry::make('employee.name')
+                                        ->label('Target Employee')
+                                        ->icon('heroicon-o-user')
+                                        ->weight(FontWeight::Bold),
+                                    TextEntry::make('employee.department.name')
+                                        ->label('Department')
+                                        ->icon('heroicon-o-building-office')
+                                        ->placeholder('—'),
+                                    TextEntry::make('employee_job_title')
+                                        ->label('Job Title')
+                                        ->getStateUsing(fn (EmployeeRequest $record): ?string => $record->employee?->job_title ?? $record->employee?->job?->name)
+                                        ->icon('heroicon-o-briefcase')
+                                        ->placeholder('—'),
+                                    TextEntry::make('requester_display')
+                                        ->label('Sent By')
+                                        ->getStateUsing(function (EmployeeRequest $record): string {
+                                            $requester = $record->requester;
+                                            if (! $requester) {
+                                                return 'System';
+                                            }
+                                            if ($record->requested_by && (int) $record->requested_by === (int) $record->employee?->user_id) {
+                                                return "{$requester->name} (Employee Self)";
+                                            }
+
+                                            return "{$requester->name} (On behalf of employee)";
+                                        })
+                                        ->icon('heroicon-o-paper-airplane'),
+                                    TextEntry::make('submitted_at')
+                                        ->label('Date & Time Submitted')
+                                        ->dateTime('d M Y, h:i A (l)')
+                                        ->placeholder('Not submitted')
+                                        ->icon('heroicon-o-clock'),
+                                ]),
+
+                            Section::make('Approval & Routing Status')
+                                ->schema([
+                                    TextEntry::make('status')
+                                        ->label('Status')
+                                        ->badge()
+                                        ->color(fn (string $state): string => match ($state) {
+                                            'approved'         => 'success',
+                                            'rejected'         => 'danger',
+                                            'pending_approval' => 'warning',
+                                            default            => 'gray',
+                                        }),
+                                    TextEntry::make('routing_info')
+                                        ->label('Routing / Next Approver')
+                                        ->getStateUsing(function (EmployeeRequest $record): string {
+                                            if ($record->status === 'approved') {
+                                                return 'Approved';
+                                            }
+                                            if ($record->status === 'rejected') {
+                                                return 'Rejected (Reason: '.($record->rejection_reason ?? '—').')';
+                                            }
+                                            if ($record->approvalRequest) {
+                                                return app(ApprovalEngine::class)->describeCurrentApprover($record->approvalRequest);
+                                            }
+
+                                            return 'Draft';
+                                        })
+                                        ->badge()
+                                        ->color('info')
+                                        ->icon('heroicon-o-arrows-pointing-in'),
+                                    TextEntry::make('line_manager_info')
+                                        ->label('Line Manager Status')
+                                        ->getStateUsing(function (EmployeeRequest $record): string {
+                                            $parentId = $record->employee?->parent_id;
+                                            if (! $parentId) {
+                                                return 'No Line Manager assigned (Handled by HR)';
+                                            }
+                                            $manager = Employee::find($parentId);
+
+                                            return $manager ? "Line Manager: {$manager->name}" : 'No Line Manager assigned';
+                                        })
+                                        ->icon('heroicon-o-user-group'),
+                                    TextEntry::make('approved_at')
+                                        ->label('Approved At')
+                                        ->dateTime('d M Y, h:i A')
+                                        ->visible(fn (EmployeeRequest $record): bool => filled($record->approved_at))
+                                        ->icon('heroicon-o-check-circle'),
+                                    TextEntry::make('rejection_reason')
+                                        ->label('Rejection Reason')
+                                        ->visible(fn (EmployeeRequest $record): bool => filled($record->rejection_reason))
+                                        ->icon('heroicon-o-x-circle'),
+                                ]),
+                        ])->columnSpan(1),
+                    ]),
+            ]);
     }
 
     /**
@@ -248,20 +464,93 @@ class EmployeeRequestResource extends Resource
     {
         return $table->columns([
             TextColumn::make('reference')->searchable()->placeholder('Draft'),
-            TextColumn::make('employee.name')->searchable()->sortable(),
-            TextColumn::make('requestType.name')->label('Approval type')->searchable(),
-            TextColumn::make('nature_of_expense')->label('Nature of expense')->searchable()->limit(25),
-            TextColumn::make('title')->searchable()->limit(30),
-            TextColumn::make('billed_amount')->label('Claim/budget')->money(fn (EmployeeRequest $record): string => $record->currency?->code ?? 'PKR')->placeholder('—')->sortable(),
-            TextColumn::make('tax_deduction_rate')->label('Tax rate')->suffix('%')->placeholder('—')->sortable(),
-            TextColumn::make('income_tax_deduction')->label('Income tax')->money(fn (EmployeeRequest $record): string => $record->currency?->code ?? 'PKR')->placeholder('—')->sortable(),
-            TextColumn::make('sales_tax_deduction')->label('Sales tax')->money(fn (EmployeeRequest $record): string => $record->currency?->code ?? 'PKR')->placeholder('—')->sortable(),
-            TextColumn::make('amount')->label('Net payment')->money(fn (EmployeeRequest $record): string => $record->currency?->code ?? 'PKR')->placeholder('—')->sortable(),
+            TextColumn::make('employee.name')
+                ->label('Employee')
+                ->searchable()
+                ->sortable()
+                ->description(function (EmployeeRequest $record): ?string {
+                    if ($record->requested_by && (int) $record->requested_by !== (int) $record->employee?->user_id) {
+                        $by = $record->requester?->name ?? 'User #'.$record->requested_by;
+
+                        return "Sent by {$by}";
+                    }
+
+                    return null;
+                }),
+            TextColumn::make('requestType.name')
+                ->label('Request type')
+                ->searchable()
+                ->badge()
+                ->color(fn (EmployeeRequest $record): string => match ($record->requestType?->category) {
+                    'attendance_correction' => 'info',
+                    'financial'             => 'warning',
+                    default                 => 'gray',
+                }),
+            TextColumn::make('target_day_and_date')
+                ->label('Day & Date')
+                ->getStateUsing(function (EmployeeRequest $record): ?string {
+                    $payload = (array) ($record->payload ?? []);
+                    $dateStr = $payload['attendance_date'] ?? null;
+                    if (! $dateStr && isset($payload['attendance_record_id'])) {
+                        $att = AttendanceRecord::find($payload['attendance_record_id']);
+                        $dateStr = $att?->attendance_date?->toDateString();
+                    }
+                    if ($dateStr) {
+                        $carbon = Carbon::parse($dateStr);
+                        $day = $payload['day_of_week'] ?? $carbon->format('l');
+
+                        return $carbon->format('d M Y').' ('.$day.')';
+                    }
+
+                    return $record->created_at?->format('d M Y (l)');
+                })
+                ->badge(fn ($state): bool => filled($state))
+                ->color('gray'),
+            TextColumn::make('details_summary')
+                ->label('Details / Times')
+                ->getStateUsing(function (EmployeeRequest $record): string {
+                    $payload = (array) ($record->payload ?? []);
+                    if (isset($payload['requested']['check_in'])) {
+                        $reqIn = $payload['requested']['check_in'] ? Carbon::parse($payload['requested']['check_in'])->format('H:i') : '—';
+                        $reqOut = ! empty($payload['requested']['check_out']) ? Carbon::parse($payload['requested']['check_out'])->format('H:i') : '—';
+                        $origIn = ! empty($payload['original']['check_in']) ? Carbon::parse($payload['original']['check_in'])->format('H:i') : '—';
+                        $origOut = ! empty($payload['original']['check_out']) ? Carbon::parse($payload['original']['check_out'])->format('H:i') : '—';
+                        if (($payload['kind'] ?? '') === 'attendance_missing_day') {
+                            return "Missed Day [In: {$reqIn} | Out: {$reqOut}]";
+                        }
+
+                        return "In: {$origIn} → {$reqIn} | Out: {$origOut} → {$reqOut}";
+                    }
+                    if ($record->nature_of_expense) {
+                        return $record->nature_of_expense;
+                    }
+
+                    return $record->title ?? '—';
+                })
+                ->description(fn (EmployeeRequest $record): ?string => $record->description ? Str::limit($record->description, 40) : null)
+                ->wrap(),
+            TextColumn::make('billed_amount')->label('Claim/budget')->money(fn (EmployeeRequest $record): string => $record->currency?->code ?? 'PKR')->placeholder('—')->sortable()->toggleable(),
+            TextColumn::make('amount')->label('Net payment')->money(fn (EmployeeRequest $record): string => $record->currency?->code ?? 'PKR')->placeholder('—')->sortable()->toggleable(),
             TextColumn::make('status')->badge()->color(fn (string $state): string => match ($state) {
                 'approved' => 'success', 'rejected' => 'danger', 'pending_approval' => 'warning', default => 'gray',
             }),
-            TextColumn::make('accountingMove.name')->label('Accounting draft')->placeholder('—'),
-            TextColumn::make('submitted_at')->dateTime()->placeholder('Not submitted'),
+            TextColumn::make('current_approver')
+                ->label('Current Approver')
+                ->getStateUsing(function (EmployeeRequest $record): string {
+                    if ($record->status === 'approved') {
+                        return 'Approved';
+                    }
+                    if ($record->status === 'rejected') {
+                        return 'Rejected';
+                    }
+                    if ($record->approvalRequest) {
+                        return app(ApprovalEngine::class)->describeCurrentApprover($record->approvalRequest);
+                    }
+
+                    return 'Draft';
+                })
+                ->limit(35),
+            TextColumn::make('submitted_at')->dateTime()->placeholder('Not submitted')->toggleable(),
         ])
             ->defaultSort('created_at', 'desc')
             ->filters([
@@ -270,6 +559,7 @@ class EmployeeRequestResource extends Resource
                     'approved' => 'Approved', 'rejected' => 'Rejected',
                 ]),
             ])->recordActions([
+                ViewAction::make()->modalHeading('Employee Request Details'),
                 Action::make('submit')
                     ->icon('heroicon-o-paper-airplane')->color('primary')->requiresConfirmation()
                     ->visible(fn (EmployeeRequest $record): bool => in_array($record->status, ['draft', 'rejected'], true))
@@ -460,13 +750,39 @@ class EmployeeRequestResource extends Resource
 
         $companyId = (int) $user->default_company_id;
 
+        $withRelations = [
+            'employee.department',
+            'employee.job',
+            'employee.parent',
+            'requester',
+            'requestType',
+            'currency',
+            'approvalRequest.workflow.steps',
+            'approvalRequest.decisions.actor',
+        ];
+
         if (
-            $user->hasRole('Admin')
-            || $user->hasRole('Super Admin')
+            $user->hasRole([
+                'Admin',
+                'Super Admin',
+                'hr',
+                'hr_manager',
+                'hr manager',
+                'hr_ops_manager',
+                'hr ops manager',
+                'hr operations manager',
+                'hr_administrator',
+                'hr administrator',
+                'human resources',
+                'human resources manager',
+            ])
             || $user->can('hr_view_all_records')
+            || $user->can('hr_manage_attendance')
+            || $user->can('hr_manage_employee_requests')
+            || $user->can('hr_approve_leave')
             || static::isFinanceUser($user)
         ) {
-            return parent::getEloquentQuery()->where('company_id', $companyId);
+            return parent::getEloquentQuery()->where('company_id', $companyId)->with($withRelations);
         }
 
         $visible = app(HrHierarchyService::class)->visibleEmployeeIds($user, $companyId);
@@ -494,6 +810,7 @@ class EmployeeRequestResource extends Resource
             ->pluck('request_id');
 
         return parent::getEloquentQuery()->where('company_id', $companyId)
+            ->with($withRelations)
             ->where(fn (Builder $query) => $query
                 ->whereIn('employee_id', $visible)
                 ->orWhereIn('approval_request_id', $pendingOnMe)

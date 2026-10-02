@@ -2,7 +2,8 @@
 
 namespace App\Providers\Filament;
 
-use App\Filament\Widgets\PendingActionsOverview;
+use App\Filament\Widgets\PendingActionsCenterWidget;
+use App\Filament\Widgets\TodayAttendanceRollCallWidget;
 use App\Http\Middleware\ApplyBrandSettings;
 use App\Http\Middleware\SetLocale;
 use BezhanSalleh\FilamentShield\FilamentShieldPlugin;
@@ -66,7 +67,8 @@ class AdminPanelProvider extends PanelProvider
                 Dashboard::class,
             ])
             ->widgets([
-                PendingActionsOverview::class,
+                PendingActionsCenterWidget::class,
+                TodayAttendanceRollCallWidget::class,
             ])
             ->plugins([
                 ManufacturingPlugin::make(),

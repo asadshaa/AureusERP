@@ -10,6 +10,7 @@ use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
 use Filament\Pages\Page;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\RateLimiter;
@@ -26,6 +27,7 @@ use Webkul\Employee\Services\Attendance\GeofencedAttendanceService;
 use Webkul\Employee\Services\EmployeeRequestService;
 use Webkul\Employee\Support\HrPermissions;
 use Webkul\Support\Enums\NavigationGroup;
+use Webkul\TimeOff\Models\Leave;
 
 /**
  * Employee self-service Check In / Check Out. The browser only supplies raw
@@ -84,14 +86,210 @@ class MyAttendance extends Page
         return 'My Attendance';
     }
 
-    // ------------------------------------------------------------------
-    // View data
-    // ------------------------------------------------------------------
+    public int $calendarYear = 0;
+
+    public int $calendarMonth = 0;
+
+    public function mount(): void
+    {
+        $this->calendarYear = (int) now()->year;
+        $this->calendarMonth = (int) now()->month;
+    }
+
+    public function previousMonth(): void
+    {
+        if ($this->calendarMonth <= 1) {
+            $this->calendarMonth = 12;
+            $this->calendarYear--;
+        } else {
+            $this->calendarMonth--;
+        }
+    }
+
+    public function nextMonth(): void
+    {
+        if ($this->calendarMonth >= 12) {
+            $this->calendarMonth = 1;
+            $this->calendarYear++;
+        } else {
+            $this->calendarMonth++;
+        }
+    }
+
+    public function currentMonth(): void
+    {
+        $this->calendarYear = (int) now()->year;
+        $this->calendarMonth = (int) now()->month;
+    }
 
     /** @return array<string, mixed>|null */
     public function getTodayState(): ?array
     {
         return app(GeofencedAttendanceService::class)->todayState(Auth::user());
+    }
+
+    /**
+     * @return array{
+     *     monthName: string,
+     *     year: int,
+     *     month: int,
+     *     stats: array{daysPresent: int, totalHours: float, lateDays: int, leaveDays: int},
+     *     days: array<int, array<string, mixed>>
+     * }
+     */
+    public function getMonthlyCalendarData(): array
+    {
+        if ($this->calendarYear === 0) {
+            $this->mount();
+        }
+
+        $employee = app(GeofencedAttendanceService::class)->resolveEmployee(Auth::user());
+        if (! $employee) {
+            return [
+                'monthName' => '',
+                'year'      => $this->calendarYear,
+                'month'     => $this->calendarMonth,
+                'stats'     => ['daysPresent' => 0, 'totalHours' => 0.0, 'lateDays' => 0, 'leaveDays' => 0],
+                'days'      => [],
+            ];
+        }
+
+        $timezone = app(AttendanceScheduleResolver::class)->timezoneFor($employee);
+        $monthStart = Carbon::createFromDate($this->calendarYear, $this->calendarMonth, 1, $timezone)->startOfMonth();
+        $monthEnd = $monthStart->copy()->endOfMonth();
+        $todayStr = Carbon::today($timezone)->toDateString();
+
+        $records = AttendanceRecord::query()
+            ->where('company_id', $employee->company_id)
+            ->where('employee_id', $employee->id)
+            ->whereDate('attendance_date', '>=', $monthStart->toDateString())
+            ->whereDate('attendance_date', '<=', $monthEnd->toDateString())
+            ->get()
+            ->keyBy(fn ($r) => $r->attendance_date->toDateString());
+
+        $leaves = Leave::query()
+            ->where('company_id', $employee->company_id)
+            ->where('employee_id', $employee->id)
+            ->where('state', 'confirm')
+            ->whereDate('date_from', '<=', $monthEnd->toDateString())
+            ->whereDate('date_to', '>=', $monthStart->toDateString())
+            ->get();
+
+        $daysPresent = 0;
+        $totalHours = 0.0;
+        $lateDays = 0;
+        $leaveDays = 0;
+
+        $days = [];
+
+        // Prepend empty slots for start of week (Monday = 1, Sunday = 7)
+        $startDayOfWeek = $monthStart->dayOfWeekIso;
+        for ($pad = 1; $pad < $startDayOfWeek; $pad++) {
+            $days[] = [
+                'type' => 'empty',
+                'day'  => null,
+                'date' => null,
+            ];
+        }
+
+        for ($d = 1; $d <= $monthEnd->day; $d++) {
+            $currentDate = Carbon::createFromDate($this->calendarYear, $this->calendarMonth, $d, $timezone);
+            $dateStr = $currentDate->toDateString();
+            $isToday = $dateStr === $todayStr;
+            $isFuture = $dateStr > $todayStr;
+            $isWeekend = $currentDate->isWeekend();
+
+            /** @var AttendanceRecord|null $record */
+            $record = $records->get($dateStr);
+
+            $matchingLeave = $leaves->first(function ($l) use ($dateStr) {
+                return $l->date_from->toDateString() <= $dateStr && $l->date_to->toDateString() >= $dateStr;
+            });
+
+            $status = 'none';
+            $workedHours = null;
+            $lateMinutes = null;
+            $checkIn = null;
+            $checkOut = null;
+            $badgeColor = 'gray';
+            $label = '';
+
+            if ($record) {
+                if ($record->status === 'present') {
+                    $daysPresent++;
+                    $totalHours += (float) ($record->worked_hours ?? 0);
+                    $workedHours = number_format((float) $record->worked_hours, 1).'h';
+                    $status = 'present';
+                    $badgeColor = 'success';
+                    $label = $workedHours;
+
+                    if ($record->late_minutes > 0) {
+                        $lateDays++;
+                        $lateMinutes = $record->late_minutes.'m';
+                        $status = 'late';
+                        $badgeColor = 'warning';
+                        $label = 'Late '.$lateMinutes;
+                    }
+                } elseif ($record->status === 'leave') {
+                    $leaveDays++;
+                    $status = 'leave';
+                    $badgeColor = 'info';
+                    $label = 'Leave';
+                }
+
+                if ($record->verification_status === 'needs_review') {
+                    $status = 'needs_review';
+                    $badgeColor = 'amber';
+                    $label = 'Review';
+                }
+
+                $checkIn = $record->check_in ? $record->check_in->setTimezone($timezone)->format('h:i A') : null;
+                $checkOut = $record->check_out ? $record->check_out->setTimezone($timezone)->format('h:i A') : null;
+            } elseif ($matchingLeave) {
+                $leaveDays++;
+                $status = 'leave';
+                $badgeColor = 'info';
+                $label = 'Leave';
+            } elseif (! $isWeekend && ! $isFuture) {
+                $status = 'absent';
+                $badgeColor = 'danger';
+                $label = 'Missing';
+            } elseif ($isWeekend) {
+                $status = 'weekend';
+                $badgeColor = 'gray';
+                $label = 'Off';
+            }
+
+            $days[] = [
+                'type'        => 'day',
+                'day'         => $d,
+                'date'        => $dateStr,
+                'isToday'     => $isToday,
+                'isFuture'    => $isFuture,
+                'isWeekend'   => $isWeekend,
+                'status'      => $status,
+                'badgeColor'  => $badgeColor,
+                'label'       => $label,
+                'workedHours' => $workedHours,
+                'lateMinutes' => $lateMinutes,
+                'checkIn'     => $checkIn,
+                'checkOut'    => $checkOut,
+                'recordId'    => $record?->id,
+            ];
+        }
+
+        return [
+            'monthName' => $monthStart->format('F Y'),
+            'year'      => $this->calendarYear,
+            'month'     => $this->calendarMonth,
+            'stats'     => [
+                'daysPresent' => $daysPresent,
+                'totalHours'  => round($totalHours, 1),
+                'lateDays'    => $lateDays,
+                'leaveDays'   => $leaveDays,
+            ],
+            'days'      => $days,
+        ];
     }
 
     /** @return Collection<int, array<string, mixed>> the last 14 days, times shown in the employee's timezone */

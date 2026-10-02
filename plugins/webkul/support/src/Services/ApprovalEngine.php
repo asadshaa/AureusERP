@@ -128,10 +128,87 @@ final class ApprovalEngine
         $subjectEmployee = $this->resolveHierarchySubjectEmployee($request);
 
         return match ($step->hierarchy_route) {
-            'requester_manager'  => (int) $subjectEmployee?->parent?->user_id === (int) $actor->id,
-            'department_manager' => (int) $subjectEmployee?->department?->manager?->user_id === (int) $actor->id,
-            'team_manager'       => (int) $subjectEmployee?->team?->manager?->user_id === (int) $actor->id,
+            'requester_manager'  => $this->canActAsRequesterManager($subjectEmployee, $actor, $request),
+            'department_manager' => $this->canActAsDepartmentManager($subjectEmployee, $actor, $request),
+            'team_manager'       => $this->canActAsTeamManager($subjectEmployee, $actor, $request),
             default              => false,
+        };
+    }
+
+    private function canActAsRequesterManager(mixed $subjectEmployee, User $actor, ApprovalRequest $request): bool
+    {
+        $managerUserId = $subjectEmployee?->parent?->user_id;
+
+        if ($managerUserId) {
+            return (int) $managerUserId === (int) $actor->id;
+        }
+
+        // If no line manager is assigned (or line manager has no user account),
+        // fallback to HR / Admin for review and approval.
+        if ($subjectEmployee?->user_id && (int) $subjectEmployee->user_id === (int) $actor->id) {
+            return false;
+        }
+
+        return $this->isHrOrAdminApprover($actor, $request);
+    }
+
+    private function canActAsDepartmentManager(mixed $subjectEmployee, User $actor, ApprovalRequest $request): bool
+    {
+        $deptManagerUserId = $subjectEmployee?->department?->manager?->user_id;
+
+        if ($deptManagerUserId) {
+            return (int) $deptManagerUserId === (int) $actor->id;
+        }
+
+        if ($subjectEmployee?->user_id && (int) $subjectEmployee->user_id === (int) $actor->id) {
+            return false;
+        }
+
+        return $this->isHrOrAdminApprover($actor, $request);
+    }
+
+    private function canActAsTeamManager(mixed $subjectEmployee, User $actor, ApprovalRequest $request): bool
+    {
+        $teamManagerUserId = $subjectEmployee?->team?->manager?->user_id;
+
+        if ($teamManagerUserId) {
+            return (int) $teamManagerUserId === (int) $actor->id;
+        }
+
+        if ($subjectEmployee?->user_id && (int) $subjectEmployee->user_id === (int) $actor->id) {
+            return false;
+        }
+
+        return $this->isHrOrAdminApprover($actor, $request);
+    }
+
+    private function isHrOrAdminApprover(User $actor, ApprovalRequest $request): bool
+    {
+        if ($actor->hasRole([
+            'Admin',
+            'Super Admin',
+            'hr',
+            'hr_manager',
+            'hr manager',
+            'hr_ops_manager',
+            'hr ops manager',
+            'hr operations manager',
+            'hr_administrator',
+            'hr administrator',
+            'human resources',
+            'human resources manager',
+        ])) {
+            return true;
+        }
+
+        if ($actor->can('hr_view_all_records')) {
+            return true;
+        }
+
+        return match ($request->request_type) {
+            'attendance_time_change', 'missing_attendance' => $actor->can('hr_manage_attendance'),
+            'leave_request'                                => $actor->can('hr_approve_leave'),
+            default                                        => $actor->can('hr_manage_employee_requests'),
         };
     }
 
@@ -180,9 +257,9 @@ final class ApprovalEngine
         }
 
         return match ($step->hierarchy_route) {
-            'requester_manager'  => 'Forwarded to your manager.',
-            'department_manager' => 'Forwarded to the department manager.',
-            'team_manager'       => 'Forwarded to the team manager.',
+            'requester_manager'  => 'Forwarded to HR (no line manager assigned).',
+            'department_manager' => 'Forwarded to HR (no department manager assigned).',
+            'team_manager'       => 'Forwarded to HR (no team manager assigned).',
             default              => 'Forwarded for approval.',
         };
     }

@@ -2,6 +2,7 @@
 
 namespace Webkul\Recruitment\Filament\Widgets;
 
+use BezhanSalleh\FilamentShield\Traits\HasWidgetShield;
 use Filament\Widgets\ChartWidget;
 use Illuminate\Contracts\Support\Htmlable;
 use Illuminate\Support\Carbon;
@@ -10,11 +11,35 @@ use Webkul\Recruitment\Models\Applicant;
 
 class ApplicantChartWidget extends ChartWidget
 {
+    use HasWidgetShield {
+        canView as shieldCanView;
+    }
+
     protected static ?int $sort = 2;
 
     protected int|string|array $columnSpan = 'full';
 
     protected ?string $maxHeight = '400px';
+
+    public static function canView(): bool
+    {
+        $user = Auth::user();
+        if (! $user) {
+            return false;
+        }
+
+        return $user->hasRole([
+            'Admin',
+            'Super Admin',
+            'recruiter',
+            'hiring_manager',
+            'hr_administrator',
+            'hr_manager',
+            'hr_ops_manager',
+        ])
+        || (int) $user->id === 1
+        || $user->can('view_any_applicant');
+    }
 
     protected static function getPagePermission(): ?string
     {

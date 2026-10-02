@@ -2,7 +2,10 @@
 
 namespace Webkul\TimeOff\Services;
 
+use Filament\Notifications\Notification as FilamentNotification;
+use Illuminate\Support\Carbon;
 use RuntimeException;
+use Webkul\Employee\Models\Employee;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\ApprovalRequest;
 use Webkul\Support\Services\ApprovalEngine;
@@ -52,6 +55,8 @@ class LeaveApprovalService
             'rejected_at'         => null,
             'rejection_reason'    => null,
         ]);
+
+        $this->notifyApprovers($leave, $requester);
 
         return $approval;
     }
@@ -110,5 +115,67 @@ class LeaveApprovalService
         }
 
         return $leave->fresh(['approvalRequest.decisions']);
+    }
+
+    private function notifyApprovers(Leave $leave, User $requester): void
+    {
+        try {
+            $leave->loadMissing(['employee', 'holidayStatus']);
+            $employee = $leave->employee;
+            if (! $employee) {
+                return;
+            }
+
+            $parentId = $employee->parent_id;
+            $manager = $parentId ? Employee::query()->with('user')->find($parentId)?->user : null;
+
+            $hasManager = $manager && $manager->is_active && (int) $manager->id !== (int) $requester->id;
+
+            if ($hasManager) {
+                $recipients = collect([$manager]);
+                $routingNote = '[Routed to Line Manager]';
+            } else {
+                $recipients = User::query()
+                    ->where('default_company_id', $leave->company_id)
+                    ->where('is_active', true)
+                    ->get()
+                    ->filter(fn (User $u): bool => (
+                        $u->hasRole([
+                            'Admin', 'Super Admin', 'hr', 'hr_manager', 'hr manager',
+                            'hr_ops_manager', 'hr ops manager', 'hr operations manager',
+                            'hr_administrator', 'hr administrator', 'human resources', 'human resources manager',
+                        ])
+                        || $u->can('hr_approve_leave')
+                        || $u->can('hr_view_all_records')
+                    ) && (int) $u->id !== (int) $requester->id);
+                $routingNote = '[Forwarded to HR: no line manager assigned]';
+            }
+
+            if ($recipients->isEmpty()) {
+                return;
+            }
+
+            $who = $employee->name.((int) $employee->user_id !== (int) $requester->id ? " (by {$requester->name})" : '');
+            $leaveTypeName = $leave->holidayStatus?->name ?? 'Leave';
+            $startDate = Carbon::parse($leave->request_date_from);
+            $endDate = Carbon::parse($leave->request_date_to ?: $leave->request_date_from);
+
+            $dayAndDate = "From {$startDate->format('l, d M Y')} to {$endDate->format('l, d M Y')} ({$leave->number_of_days} days)";
+            $reason = $leave->private_name ? " | Note: {$leave->private_name}" : '';
+
+            $title = "Leave Request: {$employee->name}";
+            $body = "{$who} submitted {$leaveTypeName} request ({$dayAndDate}){$reason} {$routingNote}";
+
+            $notification = FilamentNotification::make()
+                ->warning()
+                ->title($title)
+                ->body($body);
+
+            foreach ($recipients as $recipient) {
+                $recipient->notifyNow($notification->toDatabase());
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 }

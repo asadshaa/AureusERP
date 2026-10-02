@@ -40,6 +40,11 @@ class FullCalendarWidget extends Widget implements HasActions, HasConfigurations
 
     protected int|string|array $columnSpan = 'full';
 
+    public static function canView(): bool
+    {
+        return static::class !== self::class;
+    }
+
     protected function headerActions(): array
     {
         return [

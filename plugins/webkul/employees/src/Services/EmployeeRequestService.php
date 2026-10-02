@@ -3,6 +3,7 @@
 namespace Webkul\Employee\Services;
 
 use Brick\Math\BigDecimal;
+use Filament\Notifications\Notification as FilamentNotification;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use RuntimeException;
@@ -21,7 +22,6 @@ use Webkul\Employee\Models\EmployeeRequest;
 use Webkul\Employee\Models\EmployeeRequestType;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\ApprovalRequest;
-use Webkul\Support\Models\ApprovalWorkflow;
 use Webkul\Support\Services\ApprovalEngine;
 
 class EmployeeRequestService
@@ -67,6 +67,8 @@ class EmployeeRequestService
             'rejection_reason'    => null,
             'rejected_at'         => null,
         ]);
+
+        $this->notifyApprovers($request, $requester);
 
         return $approval;
     }
@@ -123,7 +125,6 @@ class EmployeeRequestService
         if (! $requestType) {
             throw new RuntimeException('No active "Attendance Time Change" request type is configured for this company.');
         }
-        $this->assertAttendanceApproverExists($record->employee, $requestType);
 
         $original = [
             'check_in'  => $record->check_in?->toDateTimeString(),
@@ -144,10 +145,13 @@ class EmployeeRequestService
                 'description'     => $reason,
                 'status'          => 'draft',
                 'payload'         => [
-                    'kind'                 => 'attendance_time_change',
-                    'attendance_record_id' => $record->id,
-                    'original'             => $original,
-                    'requested'            => $requested,
+                    'kind'                      => 'attendance_time_change',
+                    'attendance_record_id'      => $record->id,
+                    'attendance_date'           => $record->attendance_date?->toDateString(),
+                    'day_of_week'               => $record->attendance_date?->format('l'),
+                    'formatted_date'            => $record->attendance_date?->format('d M Y'),
+                    'original'                  => $original,
+                    'requested'                 => $requested,
                 ],
             ]);
 
@@ -155,36 +159,6 @@ class EmployeeRequestService
 
             return $request->fresh(['approvalRequest', 'requestType']);
         });
-    }
-
-    /**
-     * The attendance workflow routes to the employee's line manager, and the
-     * ApprovalEngine deliberately has no admin bypass. Without a line manager
-     * the request would sit pending forever with nobody able to act, so refuse
-     * it up front with a message that says what to fix.
-     */
-    private function assertAttendanceApproverExists(Employee $employee, EmployeeRequestType $requestType): void
-    {
-        $firstStep = ApprovalWorkflow::query()
-            ->where('company_id', $employee->company_id)
-            ->where('request_type', $requestType->approval_request_type)
-            ->where('is_active', true)
-            ->first()
-            ?->steps()
-            ->orderBy('sequence')
-            ->first();
-
-        if ($firstStep?->hierarchy_route !== 'requester_manager') {
-            return;
-        }
-
-        // Read the current parent_id rather than a possibly stale cached relation.
-        $managerUser = $employee->parent_id
-            ? Employee::query()->with('user')->find($employee->parent_id)?->user
-            : null;
-        if (! $managerUser) {
-            throw new RuntimeException('No line manager with a user account is set for this employee, so there is nobody to approve the request. Ask HR to set the line manager, or have HR correct the attendance directly.');
-        }
     }
 
     /**
@@ -245,7 +219,6 @@ class EmployeeRequestService
         if (! $requestType) {
             throw new RuntimeException('No active "Attendance Time Change" request type is configured for this company.');
         }
-        $this->assertAttendanceApproverExists($employee, $requestType);
 
         return DB::transaction(function () use ($employee, $requester, $requestType, $date, $requested, $reason): EmployeeRequest {
             $request = EmployeeRequest::query()->create([
@@ -259,6 +232,8 @@ class EmployeeRequestService
                 'payload'         => [
                     'kind'            => 'attendance_missing_day',
                     'attendance_date' => $date->toDateString(),
+                    'day_of_week'     => $date->format('l'),
+                    'formatted_date'  => $date->format('d M Y'),
                     'original'        => ['check_in' => null, 'check_out' => null],
                     'requested'       => $requested,
                 ],
@@ -605,5 +580,89 @@ class EmployeeRequestService
         return $request->nature_of_expense
             ? "{$request->title} ({$request->nature_of_expense})"
             : $request->title;
+    }
+
+    private function notifyApprovers(EmployeeRequest $request, User $requester): void
+    {
+        try {
+            $employee = $request->employee;
+            if (! $employee) {
+                return;
+            }
+
+            $parentId = $employee->parent_id;
+            $manager = $parentId ? Employee::query()->with('user')->find($parentId)?->user : null;
+
+            $hasManager = $manager && $manager->is_active && (int) $manager->id !== (int) $requester->id;
+
+            if ($hasManager) {
+                $recipients = collect([$manager]);
+                $routingNote = '[Routed to Line Manager]';
+            } else {
+                $recipients = User::query()
+                    ->where('default_company_id', $request->company_id)
+                    ->where('is_active', true)
+                    ->get()
+                    ->filter(fn (User $u): bool => (
+                        $u->hasRole([
+                            'Admin', 'Super Admin', 'hr', 'hr_manager', 'hr manager',
+                            'hr_ops_manager', 'hr ops manager', 'hr operations manager',
+                            'hr_administrator', 'hr administrator', 'human resources', 'human resources manager',
+                        ])
+                        || $u->can('hr_manage_attendance')
+                        || $u->can('hr_manage_employee_requests')
+                        || $u->can('hr_view_all_records')
+                    ) && (int) $u->id !== (int) $requester->id);
+                $routingNote = '[Forwarded to HR: no line manager assigned]';
+            }
+
+            if ($recipients->isEmpty()) {
+                return;
+            }
+
+            $who = $employee->name.((int) $employee->user_id !== (int) $requester->id ? " (by {$requester->name})" : '');
+            $what = $request->requestType?->name ?? 'Employee Request';
+            $payload = (array) ($request->payload ?? []);
+
+            $dateStr = $payload['attendance_date'] ?? null;
+            if (! $dateStr && isset($payload['attendance_record_id'])) {
+                $dateStr = AttendanceRecord::find($payload['attendance_record_id'])?->attendance_date?->toDateString();
+            }
+
+            $dayAndDate = '';
+            if ($dateStr) {
+                $carbon = Carbon::parse($dateStr);
+                $dayAndDate = " | Day: {$carbon->format('l')}, Date: {$carbon->format('d M Y')}";
+            }
+
+            $timeDetails = '';
+            if (isset($payload['requested']['check_in'])) {
+                $reqIn = $payload['requested']['check_in'] ? Carbon::parse($payload['requested']['check_in'])->format('H:i') : '—';
+                $reqOut = ! empty($payload['requested']['check_out']) ? Carbon::parse($payload['requested']['check_out'])->format('H:i') : '—';
+                $origIn = ! empty($payload['original']['check_in']) ? Carbon::parse($payload['original']['check_in'])->format('H:i') : '—';
+                $origOut = ! empty($payload['original']['check_out']) ? Carbon::parse($payload['original']['check_out'])->format('H:i') : '—';
+                if (($payload['kind'] ?? '') === 'attendance_missing_day') {
+                    $timeDetails = " | Times: In {$reqIn}, Out {$reqOut}";
+                } else {
+                    $timeDetails = " | Times: In {$origIn}→{$reqIn}, Out {$origOut}→{$reqOut}";
+                }
+            }
+
+            $reason = $request->description ? " | Note: {$request->description}" : '';
+
+            $title = "{$what} Request: {$employee->name}";
+            $body = "{$who} submitted {$what}{$dayAndDate}{$timeDetails}{$reason} {$routingNote}";
+
+            $notification = FilamentNotification::make()
+                ->warning()
+                ->title($title)
+                ->body($body);
+
+            foreach ($recipients as $recipient) {
+                $recipient->notifyNow($notification->toDatabase());
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 }

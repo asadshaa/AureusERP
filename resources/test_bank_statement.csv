@@ -1,0 +1,9 @@
+Meezan Bank Limited - Account Statement
+Account Title,Truck It In (Pvt) Ltd,,,,,50000.00
+Account Number,PLACEHOLDER-TIT-00000001,,,,,8700.00
+Statement Period,2026-09-01 to 2026-09-30,,,,,45000.00
+Currency,PKR,,,,,86300.00
+
+Transaction Date,Value Date,Description,Reference,Debit (PKR),Credit (PKR),Balance (PKR)
+2026-09-24,2026-09-24,Fuel purchase - Shell Station,AUREUS-MANUAL-TEST-FSTAG-001,7500.00,,42500.00
+2026-09-24,2026-09-24,Toll charges - M2 Motorway,AUREUS-MANUAL-TEST-FSTAG-002,1200.00,,41300.00
