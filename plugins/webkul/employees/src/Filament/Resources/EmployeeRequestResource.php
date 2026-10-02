@@ -7,6 +7,8 @@ use Filament\Actions\CreateAction;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
+use Filament\Forms\Components\DatePicker;
+use Filament\Forms\Components\DateTimePicker;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\KeyValue;
@@ -340,6 +342,7 @@ class EmployeeRequestResource extends Resource
         $visibleEmployeeIds = $user ? app(HrHierarchyService::class)->visibleEmployeeIds($user, $companyId) : collect();
 
         $isFinancial = fn (Get $get): bool => (bool) static::selectedRequestType($get)?->is_financial;
+        $isAttendance = fn (Get $get): bool => static::selectedRequestType($get)?->category === 'attendance_correction';
         $canSeeBankDetails = function (Get $get) use ($user): bool {
             if (! $user) {
                 return false;
@@ -364,10 +367,24 @@ class EmployeeRequestResource extends Resource
                     ->label('Approval Type')
                     ->relationship('requestType', 'name', modifyQueryUsing: fn (Builder $query): Builder => $query->where('company_id', $companyId)->where('is_active', true))
                     ->required()->searchable()->preload()->live()
-                    ->afterStateUpdated(fn (Set $set) => $set('nature_of_expense', null)),
+                    ->afterStateUpdated(function (Set $set, $state) {
+                        $set('nature_of_expense', null);
+                        if (! $state) {
+                            return;
+                        }
+                        $type = EmployeeRequestType::find($state);
+                        if ($type && $type->category === 'attendance_correction') {
+                            $set('currency_id', null);
+                            $set('amount', null);
+                            $set('billed_amount', null);
+                            $set('tax_deduction_rate', null);
+                            $set('income_tax_deduction', null);
+                            $set('sales_tax_deduction', null);
+                        }
+                    }),
                 Placeholder::make('approval_type_display')
                     ->label('Approval Category')
-                    ->content(fn (Get $get): string => $isFinancial($get) ? 'Claims Approval' : ($get('request_type_id') ? 'Standard Approval' : '—'))
+                    ->content(fn (Get $get): string => $isFinancial($get) ? 'Claims Approval' : ($isAttendance($get) ? 'Attendance Correction' : ($get('request_type_id') ? 'Standard Approval' : '—')))
                     ->visible(fn (Get $get): bool => filled($get('request_type_id'))),
                 Select::make('nature_of_expense')
                     ->label(fn (Get $get): string => 'What is the nature of expense'.(($name = static::selectedRequestType($get)?->name) ? " for {$name}?" : '?'))
@@ -379,19 +396,105 @@ class EmployeeRequestResource extends Resource
                     ->required(fn (Get $get): bool => (static::selectedRequestType($get)?->getExpenseNatures() ?? []) !== [])
                     ->searchable(),
             ]),
-            TextInput::make('title')->required()->maxLength(255)->columnSpanFull(),
-            Textarea::make('description')->columnSpanFull(),
+            TextInput::make('title')
+                ->required()
+                ->maxLength(255)
+                ->columnSpanFull()
+                ->placeholder(fn (Get $get): string => $isAttendance($get) ? 'e.g. Attendance time change for Sunday' : 'Request title'),
+            Textarea::make('description')
+                ->label(fn (Get $get): string => $isAttendance($get) ? 'Reason for attendance adjustment' : 'Description / Notes')
+                ->columnSpanFull(),
+
+            Section::make('Attendance Details')
+                ->columns(2)
+                ->visible($isAttendance)
+                ->schema([
+                    Select::make('payload.kind')
+                        ->label('Adjustment Type')
+                        ->options([
+                            'time_change'            => 'Adjust Times on Existing Record',
+                            'attendance_missing_day' => 'Missed Entire Day (Create Missing Attendance)',
+                        ])
+                        ->default('time_change')
+                        ->live()
+                        ->required($isAttendance),
+                    DatePicker::make('payload.attendance_date')
+                        ->label('Attendance Date')
+                        ->native(false)
+                        ->default(now()->toDateString())
+                        ->live()
+                        ->required($isAttendance)
+                        ->afterStateUpdated(function (Set $set, ?string $state, Get $get): void {
+                            if (! $state) {
+                                return;
+                            }
+                            $carbon = Carbon::parse($state);
+                            $set('payload.day_of_week', $carbon->format('l'));
+                            $set('payload.formatted_date', $carbon->format('d M Y'));
+
+                            $empId = $get('employee_id');
+                            if ($empId) {
+                                $existing = AttendanceRecord::query()
+                                    ->where('employee_id', $empId)
+                                    ->where('attendance_date', $state)
+                                    ->first();
+                                if ($existing) {
+                                    $set('payload.attendance_record_id', $existing->id);
+                                    $set('payload.original.check_in', $existing->check_in?->toDateTimeString());
+                                    $set('payload.original.check_out', $existing->check_out?->toDateTimeString());
+                                } else {
+                                    $set('payload.attendance_record_id', null);
+                                    $set('payload.original.check_in', null);
+                                    $set('payload.original.check_out', null);
+                                }
+                            }
+                        }),
+                    Placeholder::make('day_of_week_display')
+                        ->label('Day of the Week')
+                        ->content(function (Get $get): string {
+                            $date = $get('payload.attendance_date');
+
+                            return $date ? Carbon::parse($date)->format('l') : '—';
+                        })
+                        ->visible(fn (Get $get): bool => filled($get('payload.attendance_date'))),
+                    Placeholder::make('existing_times_display')
+                        ->label('Existing Recorded Times')
+                        ->content(function (Get $get): string {
+                            $origIn = $get('payload.original.check_in');
+                            $origOut = $get('payload.original.check_out');
+                            if ($origIn || $origOut) {
+                                $inStr = $origIn ? Carbon::parse($origIn)->format('H:i') : 'None';
+                                $outStr = $origOut ? Carbon::parse($origOut)->format('H:i') : 'None';
+
+                                return "Check-In: {$inStr} | Check-Out: {$outStr}";
+                            }
+
+                            return 'No attendance record found on this date (select "Missed Entire Day" if creating missing attendance).';
+                        })
+                        ->visible(fn (Get $get): bool => ($get('payload.kind') ?? 'time_change') === 'time_change' && filled($get('payload.attendance_date'))),
+                    DateTimePicker::make('payload.requested.check_in')
+                        ->label('Requested Check-In')
+                        ->seconds(false)
+                        ->required($isAttendance),
+                    DateTimePicker::make('payload.requested.check_out')
+                        ->label('Requested Check-Out')
+                        ->seconds(false)
+                        ->after('payload.requested.check_in'),
+                ]),
+
             Select::make('currency_id')
                 ->relationship('currency', 'name')
                 ->default(fn (): ?int => Auth::user()?->defaultCompany?->currency_id)
-                ->searchable()->preload(),
+                ->searchable()->preload()
+                ->visible($isFinancial)
+                ->required($isFinancial),
             FileUpload::make('attachments')
                 ->multiple()->directory('employees/requests')->visibility('private')->columnSpanFull(),
             KeyValue::make('payload')
                 ->label('Additional request details')->columnSpanFull()
-                ->visible(fn (Get $get): bool => ! $isFinancial($get)),
+                ->visible(fn (Get $get): bool => ! $isFinancial($get) && ! $isAttendance($get)),
 
-            Section::make('Request Details')->columns(2)
+            Section::make('Financial Details')->columns(2)
                 ->visible($isFinancial)
                 ->schema([
                     TextInput::make('billed_amount')
@@ -415,14 +518,14 @@ class EmployeeRequestResource extends Resource
                         ->numeric()->minValue(0)
                         ->live(onBlur: true)
                         ->afterStateUpdated(fn (Set $set, Get $get) => static::recalculateNetPayment($set, $get)),
+                    TextInput::make('amount')
+                        ->label('Net payment')
+                        ->numeric()->minValue(0)
+                        ->required($isFinancial)
+                        ->readOnly($isFinancial)
+                        ->helperText('Claim/budget minus tax deductions -- calculated automatically.')
+                        ->columnSpanFull(),
                 ]),
-
-            TextInput::make('amount')
-                ->label(fn (Get $get): string => $isFinancial($get) ? 'Net payment' : 'Amount')
-                ->numeric()->minValue(0)
-                ->required($isFinancial)
-                ->readOnly($isFinancial)
-                ->helperText(fn (Get $get): ?string => $isFinancial($get) ? 'Claim/budget minus tax deductions -- calculated automatically.' : null),
 
             Section::make('Bank Details')->columns(3)
                 ->visible(fn (Get $get): bool => $isFinancial($get) && $canSeeBankDetails($get))
@@ -712,6 +815,15 @@ class EmployeeRequestResource extends Resource
                     ->visible(fn (EmployeeRequest $record): bool => in_array($record->status, ['draft', 'rejected'], true)
                         || ($record->status === 'pending_approval' && static::isFinanceUser(Auth::user()))
                     )
+                    ->mutateFormDataUsing(function (array $data): array {
+                        if (isset($data['payload']['attendance_date'])) {
+                            $carbon = Carbon::parse($data['payload']['attendance_date']);
+                            $data['payload']['day_of_week'] = $carbon->format('l');
+                            $data['payload']['formatted_date'] = $carbon->format('d M Y');
+                        }
+
+                        return $data;
+                    })
                     ->after(function (EmployeeRequest $record): void {
                         if ($record->approval_request_id && $record->status === 'pending_approval') {
                             $record->approvalRequest?->update([
@@ -721,12 +833,27 @@ class EmployeeRequestResource extends Resource
                     }),
                 DeleteAction::make()->visible(fn (EmployeeRequest $record): bool => $record->status === 'draft'),
             ])->headerActions([
-                CreateAction::make()->label('Save Draft'),
+                CreateAction::make()
+                    ->label('Save Draft')
+                    ->mutateFormDataUsing(function (array $data): array {
+                        if (isset($data['payload']['attendance_date'])) {
+                            $carbon = Carbon::parse($data['payload']['attendance_date']);
+                            $data['payload']['day_of_week'] = $carbon->format('l');
+                            $data['payload']['formatted_date'] = $carbon->format('d M Y');
+                        }
+
+                        return $data;
+                    }),
                 Action::make('submit_new')
                     ->label('Submit')
                     ->icon('heroicon-o-paper-airplane')->color('primary')
                     ->schema(fn (): array => static::formComponents())
                     ->action(function (array $data): void {
+                        if (isset($data['payload']['attendance_date'])) {
+                            $carbon = Carbon::parse($data['payload']['attendance_date']);
+                            $data['payload']['day_of_week'] = $carbon->format('l');
+                            $data['payload']['formatted_date'] = $carbon->format('d M Y');
+                        }
                         $record = EmployeeRequest::query()->create($data);
                         try {
                             $request = app(EmployeeRequestService::class)->submit($record, Auth::user());
