@@ -456,3 +456,18 @@ it('lets the existing BankMatchingPriorityService match a real bank transaction 
         ->and($mapping->review_status)->toBe(BankReviewStatus::Suggested)
         ->and($mapping->offset_account_id)->toBe($fx['receivable']->id);
 });
+
+it('allows accounting manager to post classification directly via postClassification()', function () {
+    $fx = postingFixture();
+    $classification = postingClassification($fx);
+
+    expect($classification->validation_status)->toBe(DriveClassificationStatus::Valid)
+        ->and($classification->created_invoice_id)->toBeNull();
+
+    $move = app(DriveInvoicePostingService::class)->postClassification($classification, $fx['approver']);
+
+    $classification->refresh();
+    expect($classification->created_invoice_id)->toBe($move->id)
+        ->and($classification->validation_status)->toBe(DriveClassificationStatus::Posted)
+        ->and($move->state)->toBe(MoveState::POSTED);
+});

@@ -59,42 +59,63 @@ class DriveIngestionService
      */
     public function discover(Company $company): array
     {
-        $folderId = $this->resolveInboundFolder($company);
+        $folderIds = $this->resolveScanFolders($company);
 
         $touched = [];
+        $seenFileIds = [];
 
-        foreach ($this->drive->listFiles($folderId) as $file) {
+        foreach ($folderIds as $folderId) {
             try {
-                $touched[] = $this->discoverOne($company, $folderId, $file);
+                $files = $this->drive->listFiles($folderId);
             } catch (Throwable $e) {
-                Log::error('accounting.drive_ingestion.discover_file_failed', [
-                    'company_id'    => $company->id,
-                    'drive_file_id' => $file['id'] ?? null,
-                    'error'         => $e->getMessage(),
+                Log::warning('accounting.drive_ingestion.list_files_failed', [
+                    'company_id' => $company->id,
+                    'folder_id'  => $folderId,
+                    'error'      => $e->getMessage(),
                 ]);
 
-                $diagnostic = DriveErrorFormatter::format('Discovery', $e);
+                continue;
+            }
 
-                $failedRow = DriveIngestion::query()->updateOrCreate(
-                    [
+            foreach ($files as $file) {
+                $fileId = $file['id'] ?? null;
+                if (! $fileId || isset($seenFileIds[$fileId])) {
+                    continue;
+                }
+                $seenFileIds[$fileId] = true;
+
+                try {
+                    $touched[] = $this->discoverOne($company, $folderId, $file);
+                } catch (Throwable $e) {
+                    Log::error('accounting.drive_ingestion.discover_file_failed', [
                         'company_id'    => $company->id,
-                        'drive_file_id' => $file['id'] ?? 'unknown_'.uniqid(),
-                    ],
-                    [
-                        'drive_folder_id'   => $folderId,
-                        'filename'          => $file['name'] ?? 'unknown',
-                        'mime_type'         => $file['mimeType'] ?? 'application/octet-stream',
-                        'file_size'         => (int) ($file['size'] ?? 0),
-                        'drive_modified_at' => $this->parseModifiedTime($file['modifiedTime'] ?? null),
-                        'checksum_sha256'   => '',
-                        'status'            => DriveIngestionStatus::Failed,
-                        'failure_reason'    => json_encode($diagnostic),
-                        'discovered_at'     => now(),
-                        'processed_at'      => now(),
-                    ]
-                );
+                        'drive_file_id' => $fileId,
+                        'error'         => $e->getMessage(),
+                    ]);
 
-                $touched[] = $failedRow;
+                    $diagnostic = DriveErrorFormatter::format('Discovery', $e);
+
+                    $failedRow = DriveIngestion::query()->updateOrCreate(
+                        [
+                            'company_id'    => $company->id,
+                            'drive_file_id' => $fileId,
+                        ],
+                        [
+                            'drive_folder_id'   => $folderId,
+                            'filename'          => $file['name'] ?? 'unknown',
+                            'mime_type'         => $file['mimeType'] ?? 'application/octet-stream',
+                            'file_size'         => (int) ($file['size'] ?? 0),
+                            'drive_modified_at' => $this->parseModifiedTime($file['modifiedTime'] ?? null),
+                            'checksum_sha256'   => '',
+                            'status'            => DriveIngestionStatus::Failed,
+                            'failure_reason'    => json_encode($diagnostic),
+                            'discovered_at'     => now(),
+                            'processed_at'      => now(),
+                        ]
+                    );
+
+                    $touched[] = $failedRow;
+                }
             }
         }
 
@@ -415,6 +436,58 @@ class DriveIngestionService
         }
 
         return $parentId;
+    }
+
+    /**
+     * Resolves all scan folders for the company:
+     * 1. The primary Inbound intake folder.
+     * 2. All company subfolders (Customer Invoices, Vendor Bills, and any year/month subfolders)
+     * so that whenever an accounting manager syncs from Drive, any invoice or bill
+     * dropped into any of the company's Drive folders is discovered and retrieved.
+     *
+     * @return array<int, string> list of Drive folder IDs
+     */
+    public function resolveScanFolders(Company $company): array
+    {
+        $inboundFolderId = $this->resolveInboundFolder($company);
+        $folders = [$inboundFolderId];
+
+        $rootName = config('accounting_drive.root_folder_name', 'Aureus');
+        $sharedDriveId = config('accounting_drive.shared_drive_id');
+        $rootFolderId = $this->drive->findFolder($rootName, $sharedDriveId);
+
+        if ($rootFolderId) {
+            $companyFolderNameWithId = "{$company->name} ({$company->id})";
+            $companyFolderId = $this->drive->findFolder($companyFolderNameWithId, $rootFolderId)
+                ?? $this->drive->findFolder($company->name, $rootFolderId);
+
+            if ($companyFolderId) {
+                $queue = [$companyFolderId];
+                $visited = [];
+
+                while (! empty($queue)) {
+                    $currentId = array_shift($queue);
+                    if (isset($visited[$currentId])) {
+                        continue;
+                    }
+                    $visited[$currentId] = true;
+                    $folders[] = $currentId;
+
+                    try {
+                        $subfolders = $this->drive->listSubfolders($currentId);
+                        foreach ($subfolders as $sub) {
+                            if (! isset($visited[$sub['id']])) {
+                                $queue[] = $sub['id'];
+                            }
+                        }
+                    } catch (Throwable) {
+                        // Ignore folder listing errors for non-accessible folders
+                    }
+                }
+            }
+        }
+
+        return array_values(array_unique($folders));
     }
 
     private function parseModifiedTime(?string $value): ?Carbon

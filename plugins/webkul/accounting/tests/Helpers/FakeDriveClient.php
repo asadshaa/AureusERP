@@ -130,6 +130,22 @@ class FakeDriveClient implements DriveClient
         return $results;
     }
 
+    public function listSubfolders(string $parentFolderId): array
+    {
+        $results = [];
+
+        foreach ($this->folders as $id => $folder) {
+            if ($folder['parent'] === $parentFolderId) {
+                $results[] = [
+                    'id'   => $id,
+                    'name' => $folder['name'],
+                ];
+            }
+        }
+
+        return $results;
+    }
+
     public function downloadFileContent(string $fileId): string
     {
         if (! isset($this->files[$fileId])) {

@@ -2,11 +2,14 @@
 
 namespace Webkul\Accounting\Filament\Clusters\Configuration\Resources;
 
+use Filament\Actions\Action;
+use Filament\Actions\BulkAction;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Infolists\Components\TextEntry;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Schemas\Components\Grid;
 use Filament\Schemas\Components\Section;
@@ -15,6 +18,7 @@ use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Auth;
 use Webkul\Accounting\Enums\DriveClassificationStatus;
 use Webkul\Accounting\Enums\DriveDocumentType;
@@ -22,6 +26,7 @@ use Webkul\Accounting\Filament\Clusters\Configuration;
 use Webkul\Accounting\Filament\Clusters\Configuration\Resources\DriveIngestionClassificationResource\Pages\ListDriveIngestionClassifications;
 use Webkul\Accounting\Filament\Clusters\Configuration\Resources\DriveIngestionClassificationResource\Pages\ViewDriveIngestionClassification;
 use Webkul\Accounting\Models\DriveIngestionClassification;
+use Webkul\Accounting\Services\Drive\DriveInvoicePostingService;
 use Webkul\Accounting\Support\AccountingPermissions;
 
 /**
@@ -314,6 +319,62 @@ class DriveIngestionClassificationResource extends Resource
             ])
             ->recordActions([
                 ViewAction::make(),
+                Action::make('quickPost')
+                    ->label('Post to GL')
+                    ->icon('heroicon-o-check-badge')
+                    ->color('success')
+                    ->authorize(AccountingPermissions::ManageDocuments)
+                    ->visible(fn (DriveIngestionClassification $record) => $record->created_invoice_id === null
+                        && $record->validation_status !== DriveClassificationStatus::Posted
+                        && $record->resolved_partner_id
+                        && $record->resolved_account_id
+                        && (float) $record->extracted_amount > 0)
+                    ->requiresConfirmation()
+                    ->modalHeading('Confirm & Post to General Ledger')
+                    ->modalDescription('Are you sure you want to confirm and post this document to the General Ledger?')
+                    ->action(function (DriveIngestionClassification $record) {
+                        try {
+                            $move = app(DriveInvoicePostingService::class)->postClassification($record, Auth::user());
+                            Notification::make()->success()->title("Posted {$move->name}")->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()->danger()->title('Posting Failed')->body($e->getMessage())->send();
+                        }
+                    }),
+                Action::make('quickReject')
+                    ->label('Reject')
+                    ->icon('heroicon-o-x-circle')
+                    ->color('danger')
+                    ->authorize(AccountingPermissions::ManageDocuments)
+                    ->visible(fn (DriveIngestionClassification $record) => $record->created_invoice_id === null
+                        && $record->validation_status !== DriveClassificationStatus::Posted
+                        && $record->validation_status !== DriveClassificationStatus::Rejected)
+                    ->requiresConfirmation()
+                    ->modalHeading('Reject Ingested Document')
+                    ->modalDescription('Are you sure you want to reject this document? It will not be posted to the ledger.')
+                    ->action(function (DriveIngestionClassification $record) {
+                        $record->update(['validation_status' => DriveClassificationStatus::Rejected]);
+                        Notification::make()->warning()->title('Document Rejected')->send();
+                    }),
+            ])
+            ->bulkActions([
+                BulkAction::make('bulkReject')
+                    ->label('Reject Selected')
+                    ->icon('heroicon-o-x-circle')
+                    ->color('danger')
+                    ->authorize(AccountingPermissions::ManageDocuments)
+                    ->requiresConfirmation()
+                    ->modalHeading('Reject Selected Documents')
+                    ->modalDescription('Are you sure you want to reject the selected documents?')
+                    ->action(function (Collection $records) {
+                        $count = 0;
+                        foreach ($records as $record) {
+                            if ($record->created_invoice_id === null && $record->validation_status !== DriveClassificationStatus::Posted) {
+                                $record->update(['validation_status' => DriveClassificationStatus::Rejected]);
+                                $count++;
+                            }
+                        }
+                        Notification::make()->warning()->title("Rejected {$count} document(s)")->send();
+                    }),
             ]);
     }
 

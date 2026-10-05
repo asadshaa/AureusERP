@@ -8,6 +8,7 @@ use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Webkul\Account\Models\Account;
 use Webkul\Accounting\Enums\DriveClassificationStatus;
@@ -17,6 +18,7 @@ use Webkul\Accounting\Filament\Clusters\Customers\Resources\InvoiceResource;
 use Webkul\Accounting\Filament\Clusters\Vendors\Resources\BillResource;
 use Webkul\Accounting\Models\FsTag;
 use Webkul\Accounting\Services\Drive\DriveClassificationService;
+use Webkul\Accounting\Services\Drive\DriveInvoicePostingService;
 use Webkul\Accounting\Support\AccountingPermissions;
 use Webkul\Partner\Models\Partner;
 use Webkul\Security\Models\User;
@@ -30,6 +32,64 @@ class ViewDriveIngestionClassification extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('postToLedger')
+                ->label('Confirm & Post to Ledger')
+                ->icon('heroicon-o-check-badge')
+                ->color('success')
+                ->authorize(AccountingPermissions::ManageDocuments)
+                ->visible(fn () => $this->record->created_invoice_id === null
+                    && $this->record->validation_status !== DriveClassificationStatus::Posted
+                    && $this->record->resolved_partner_id
+                    && $this->record->resolved_account_id
+                    && (float) $this->record->extracted_amount > 0)
+                ->requiresConfirmation()
+                ->modalHeading('Confirm & Post Invoice to Ledger')
+                ->modalDescription('This will create the formal accounting Move, attach the Google Drive document, and post balanced journal entries to the General Ledger.')
+                ->action(function (): void {
+                    try {
+                        $move = app(DriveInvoicePostingService::class)->postClassification($this->record, Auth::user());
+
+                        Notification::make()
+                            ->success()
+                            ->title('Posted to General Ledger')
+                            ->body("Successfully created and posted {$move->name}.")
+                            ->send();
+
+                        $this->redirect(static::getResource()::getUrl('view', ['record' => $this->record->id]));
+                    } catch (\Throwable $e) {
+                        Notification::make()
+                            ->danger()
+                            ->title('Posting Failed')
+                            ->body($e->getMessage())
+                            ->send();
+                    }
+                }),
+
+            Action::make('reject')
+                ->label('Reject')
+                ->icon('heroicon-o-x-circle')
+                ->color('danger')
+                ->authorize(AccountingPermissions::ManageDocuments)
+                ->visible(fn () => $this->record->created_invoice_id === null
+                    && $this->record->validation_status !== DriveClassificationStatus::Posted
+                    && $this->record->validation_status !== DriveClassificationStatus::Rejected)
+                ->requiresConfirmation()
+                ->modalHeading('Reject Ingested Document')
+                ->modalDescription('Are you sure you want to reject this document? It will not be posted to the ledger.')
+                ->action(function (): void {
+                    $this->record->update([
+                        'validation_status' => DriveClassificationStatus::Rejected,
+                    ]);
+
+                    Notification::make()
+                        ->warning()
+                        ->title('Document Rejected')
+                        ->body('This document has been rejected and will not be posted.')
+                        ->send();
+
+                    $this->refreshFormData(['validation_status']);
+                }),
+
             Action::make('resolve')
                 ->label('Edit & Submit')
                 ->icon('heroicon-o-check-circle')

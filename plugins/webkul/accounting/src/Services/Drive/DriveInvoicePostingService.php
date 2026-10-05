@@ -3,6 +3,7 @@
 namespace Webkul\Accounting\Services\Drive;
 
 use Brick\Math\BigDecimal;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -25,6 +26,7 @@ use Webkul\Accounting\Models\DriveIngestionClassification;
 use Webkul\Accounting\Models\FsTag;
 use Webkul\Accounting\Services\DocumentService;
 use Webkul\Accounting\Services\FsTagService;
+use Webkul\Security\Models\User;
 use Webkul\Support\Models\ApprovalRequest;
 use Webkul\Support\Models\Currency;
 
@@ -166,7 +168,40 @@ class DriveInvoicePostingService
         }
     }
 
-    private function createAndPostMove(DriveIngestionClassification $classification, ApprovalRequest $request): Move
+    public function postClassification(DriveIngestionClassification $classification, ?User $actor = null): Move
+    {
+        if ($classification->created_invoice_id !== null) {
+            return Move::findOrFail($classification->created_invoice_id);
+        }
+
+        $actor = $actor
+            ?? Auth::user()
+            ?? User::query()->where('default_company_id', $classification->company_id)->first();
+
+        return DB::transaction(function () use ($classification, $actor): Move {
+            $locked = DriveIngestionClassification::query()
+                ->whereKey($classification->id)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ($locked->created_invoice_id !== null) {
+                return Move::findOrFail($locked->created_invoice_id);
+            }
+
+            $move = $this->createAndPostMove($locked, null, $actor);
+
+            $locked->update([
+                'created_invoice_id'     => $move->id,
+                'posted_at'              => now(),
+                'validation_status'      => DriveClassificationStatus::Posted,
+                'posting_failure_reason' => null,
+            ]);
+
+            return $move;
+        });
+    }
+
+    private function createAndPostMove(DriveIngestionClassification $classification, ?ApprovalRequest $request = null, ?User $actor = null): Move
     {
         $classification->loadMissing(['driveIngestion.document', 'resolvedPartner', 'company']);
 
@@ -256,7 +291,7 @@ class DriveInvoicePostingService
             throw new RuntimeException("Posted journal is not balanced: debit {$totalDebit} vs credit {$totalCredit}.");
         }
 
-        $this->attachDocument($classification, $move, $request);
+        $this->attachDocument($classification, $move, $request, $actor);
 
         return $move;
     }
@@ -460,7 +495,7 @@ class DriveInvoicePostingService
         return "Drive import{$suffix} (single summary line)";
     }
 
-    private function attachDocument(DriveIngestionClassification $classification, Move $move, ApprovalRequest $request): void
+    private function attachDocument(DriveIngestionClassification $classification, Move $move, ?ApprovalRequest $request = null, ?User $actor = null): void
     {
         $document = $classification->driveIngestion?->document;
         if (! $document) {
@@ -470,24 +505,20 @@ class DriveInvoicePostingService
             return;
         }
 
-        // There is no system/bot actor anywhere in this codebase (the same
-        // documented gap DriveClassificationService::routeForApproval()
-        // already lives with) -- DocumentService::attach() requires a real
-        // User for its company/permission checks. The user who actually
-        // approved this request is the most defensible acting user for an
-        // approval-triggered attachment: they are a real, company-scoped,
-        // authorized actor who just took a real action on this exact
-        // subject, not an arbitrary "first user" pulled in from nowhere.
-        $actor = $request->decisions()->latest('id')->first()?->actor;
-        if (! $actor) {
-            throw new RuntimeException('No approving user was found on the approval request to attribute the document attachment to.');
+        $actingUser = $actor
+            ?? $request?->decisions()->latest('id')->first()?->actor
+            ?? Auth::user()
+            ?? User::query()->where('default_company_id', $classification->company_id)->first();
+
+        if (! $actingUser) {
+            throw new RuntimeException('No authorized user was found to attribute the document attachment to.');
         }
 
         $this->documents->attach(
-            $actor,
+            $actingUser,
             $document,
             $move,
-            note: 'Drive-originated document, attached automatically on approval.',
+            note: 'Drive-originated document, attached automatically.',
         );
     }
 }

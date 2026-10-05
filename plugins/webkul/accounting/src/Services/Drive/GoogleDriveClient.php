@@ -197,4 +197,23 @@ class GoogleDriveClient implements DriveClient
             throw new RuntimeException('Could not trash the Drive file: '.$e->getMessage(), previous: $e);
         }
     }
+
+    public function listSubfolders(string $parentFolderId): array
+    {
+        $parentClause = "'{$parentFolderId}' in parents";
+
+        $result = $this->service->files->listFiles([
+            'q'                         => "{$parentClause} and mimeType='application/vnd.google-apps.folder' and trashed=false",
+            'spaces'                    => 'drive',
+            'fields'                    => 'files(id, name)',
+            'supportsAllDrives'         => true,
+            'includeItemsFromAllDrives' => true,
+            'pageSize'                  => 100,
+        ]);
+
+        return array_map(fn ($folder) => [
+            'id'   => $folder->getId(),
+            'name' => $folder->getName(),
+        ], $result->getFiles());
+    }
 }

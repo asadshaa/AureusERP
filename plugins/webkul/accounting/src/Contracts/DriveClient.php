@@ -91,4 +91,11 @@ interface DriveClient
      * exported in error; not part of any normal export/ingestion flow.
      */
     public function trashFile(string $fileId): void;
+
+    /**
+     * List direct child folders of $parentFolderId.
+     *
+     * @return array<int, array{id: string, name: string}>
+     */
+    public function listSubfolders(string $parentFolderId): array;
 }

@@ -183,3 +183,25 @@ it('registers a downloaded ingestion as a new Document with drive_import provena
         ->and($importedAudit->metadata['drive_ingestion_id'])->toBe($ingestion->id)
         ->and($importedAudit->metadata['drive_file_id'])->toBe($ingestion->drive_file_id);
 });
+
+it('discovers invoices and bills across Customer Invoices, Vendor Bills, and subfolders recursively', function () {
+    $user = documentTestUser(permissions: [AccountingPermissions::ManageDocuments]);
+    $company = Company::find($user->default_company_id);
+
+    $rootFolder = $this->fakeDrive->createFolder('Aureus', null);
+    $companyFolder = $this->fakeDrive->createFolder("{$company->name} ({$company->id})", $rootFolder);
+    $customerInvoicesFolder = $this->fakeDrive->createFolder('Customer Invoices', $companyFolder);
+    $yearFolder = $this->fakeDrive->createFolder('2026', $customerInvoicesFolder);
+    $monthFolder = $this->fakeDrive->createFolder('10-October', $yearFolder);
+    $vendorBillsFolder = $this->fakeDrive->createFolder('Vendor Bills', $companyFolder);
+
+    $inboundFolder = inboundFolderIdFor($this->fakeDrive, $company);
+    $this->fakeDrive->putExternalFile('inbound-doc.pdf', 'application/pdf', 'bytes inbound', $inboundFolder);
+    $this->fakeDrive->putExternalFile('customer-inv-1.pdf', 'application/pdf', 'bytes inv', $monthFolder);
+    $this->fakeDrive->putExternalFile('vendor-bill-1.pdf', 'application/pdf', 'bytes bill', $vendorBillsFolder);
+
+    $touched = $this->ingestionService->discover($company);
+
+    $filenames = collect($touched)->pluck('filename')->all();
+    expect($filenames)->toContain('inbound-doc.pdf', 'customer-inv-1.pdf', 'vendor-bill-1.pdf');
+});
