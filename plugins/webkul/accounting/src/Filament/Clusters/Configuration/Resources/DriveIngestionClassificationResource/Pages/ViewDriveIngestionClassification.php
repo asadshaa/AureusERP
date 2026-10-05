@@ -6,6 +6,7 @@ use Filament\Actions\Action;
 use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
+use Filament\Forms\Components\Toggle;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ViewRecord;
 use Illuminate\Support\Facades\Auth;
@@ -112,13 +113,32 @@ class ViewDriveIngestionClassification extends ViewRecord
                     Select::make('document_type')
                         ->label('Document Type')
                         ->options(collect(DriveDocumentType::cases())->mapWithKeys(fn ($case) => [$case->value => $case->getLabel()]))
-                        ->default($this->record->document_type?->value)
+                        ->default(fn () => ($this->record->document_type && $this->record->document_type !== DriveDocumentType::Unknown)
+                            ? $this->record->document_type->value
+                            : DriveDocumentType::CustomerInvoice->value)
                         ->required(),
                     Select::make('resolved_partner_id')
                         ->label('Partner')
                         ->options(fn () => Partner::query()->where('company_id', $this->record->company_id)->pluck('name', 'id'))
-                        ->default($this->record->resolved_partner_id)
+                        ->default(fn () => $this->record->resolved_partner_id)
                         ->searchable()
+                        ->createOptionForm([
+                            TextInput::make('name')
+                                ->label('Partner Name')
+                                ->default(fn () => $this->record->extracted_partner_name)
+                                ->required(),
+                        ])
+                        ->createOptionUsing(function (array $data) {
+                            return Partner::create([
+                                'name'          => $data['name'],
+                                'company_id'    => $this->record->company_id,
+                                'account_type'  => 'company',
+                                'sub_type'      => 'partner',
+                                'is_active'     => true,
+                                'customer_rank' => $this->record->document_type === DriveDocumentType::CustomerInvoice ? 1 : 0,
+                                'supplier_rank' => $this->record->document_type === DriveDocumentType::VendorBill ? 1 : 0,
+                            ])->id;
+                        })
                         ->required(),
                     Select::make('resolved_fs_tag_id')
                         ->label('FS Tag (Financial Statement Tag)')
@@ -128,26 +148,61 @@ class ViewDriveIngestionClassification extends ViewRecord
                             ->get()
                             ->mapWithKeys(fn ($tag) => [$tag->id => "{$tag->code} - {$tag->name}"])
                         )
-                        ->default($this->record->resolved_fs_tag_id)
+                        ->default(function () {
+                            if ($this->record->resolved_fs_tag_id) {
+                                return $this->record->resolved_fs_tag_id;
+                            }
+
+                            $isCust = $this->record->document_type === DriveDocumentType::CustomerInvoice
+                                || $this->record->document_type === DriveDocumentType::Unknown
+                                || $this->record->document_type === null;
+
+                            if ($isCust) {
+                                $tag = FsTag::query()
+                                    ->where('company_id', $this->record->company_id)
+                                    ->where('is_active', true)
+                                    ->whereNotNull('account_id')
+                                    ->where(function ($q) {
+                                        $q->where('code', 'like', '%REV%')
+                                            ->orWhere('code', 'like', '%INC%')
+                                            ->orWhereHas('account', fn ($acc) => $acc->whereIn('account_type', ['income', 'income_other']));
+                                    })
+                                    ->first();
+
+                                if ($tag) {
+                                    return $tag->id;
+                                }
+                            }
+
+                            return FsTag::query()
+                                ->where('company_id', $this->record->company_id)
+                                ->where('is_active', true)
+                                ->whereNotNull('account_id')
+                                ->value('id');
+                        })
                         ->searchable()
                         ->helperText('Selecting an FS Tag automatically resolves the GL account for accounting posting.')
                         ->required(),
                     TextInput::make('extracted_invoice_number')
                         ->label('Invoice / Refund #')
-                        ->default($this->record->extracted_invoice_number)
+                        ->default(fn () => $this->record->extracted_invoice_number)
                         ->required(),
                     TextInput::make('extracted_amount')
                         ->label('Amount')
                         ->numeric()
-                        ->default($this->record->extracted_amount)
+                        ->default(fn () => $this->record->extracted_amount)
                         ->required(),
                     TextInput::make('extracted_currency_code')
                         ->label('Currency Code')
-                        ->default($this->record->extracted_currency_code ?: 'PKR')
+                        ->default(fn () => $this->record->extracted_currency_code ?: 'USD')
                         ->required(),
                     DatePicker::make('extracted_date')
                         ->label('Document Date')
-                        ->default($this->record->extracted_date),
+                        ->default(fn () => $this->record->extracted_date ?: now()),
+                    Toggle::make('post_immediately')
+                        ->label('Post directly to General Ledger upon submission')
+                        ->helperText('When enabled, creates the formal accounting Move and balanced journal entries in the ledger immediately.')
+                        ->default(true),
                 ])
                 ->action(function (array $data): void {
                     $record = $this->record;
@@ -201,6 +256,29 @@ class ViewDriveIngestionClassification extends ViewRecord
                     $record->validation_issues = null;
                     $record->save();
 
+                    // If user opted to post directly to General Ledger immediately
+                    if (! empty($data['post_immediately'])) {
+                        try {
+                            $move = app(DriveInvoicePostingService::class)->postClassification($record, Auth::user());
+
+                            Notification::make()
+                                ->success()
+                                ->title('Posted to General Ledger')
+                                ->body("Successfully created and posted {$move->name}.")
+                                ->send();
+
+                            $this->redirect(static::getResource()::getUrl('view', ['record' => $record->id]));
+
+                            return;
+                        } catch (\Throwable $e) {
+                            Notification::make()
+                                ->danger()
+                                ->title('Posting Failed')
+                                ->body($e->getMessage())
+                                ->send();
+                        }
+                    }
+
                     // Route for approval
                     $approvals = app(ApprovalEngine::class);
                     $requester = User::query()
@@ -251,10 +329,10 @@ class ViewDriveIngestionClassification extends ViewRecord
 
                     Notification::make()
                         ->success()
-                        ->title('Classification Resolved')
+                        ->title('Classification Resolved & Verified')
                         ->body(isset($approvalRequest)
                             ? 'The document has been mapped to GL account and submitted for approval. '.$approvals->describeCurrentApprover($approvalRequest)
-                            : 'The document has been mapped to GL account and submitted for approval.')
+                            : 'The document has been mapped to GL account and marked as Valid for posting.')
                         ->send();
 
                     $this->refreshFormData(['validation_status', 'resolved_fs_tag_id', 'resolved_partner_id', 'resolved_account_id']);
@@ -272,6 +350,8 @@ class ViewDriveIngestionClassification extends ViewRecord
                             ->title('Re-analysis Complete')
                             ->body('Document candidates and resolution re-evaluated.')
                             ->send();
+
+                        $this->redirect(static::getResource()::getUrl('view', ['record' => $this->record->id]));
                     }
                 }),
 

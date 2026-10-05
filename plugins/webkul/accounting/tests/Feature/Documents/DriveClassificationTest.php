@@ -296,3 +296,40 @@ it('never resolves a partner, FS Tag or account belonging to a different company
         ->and($classification->resolved_fs_tag_id)->toBe($fx['fsTag']->id)
         ->and($classification->resolved_account_id)->toBe($fx['glAccount']->id);
 });
+
+it('resolves normalized partner matching and defaults to company revenue FS Tag for customer invoice without explicit code', function () {
+    $fx = driveClassificationFixture();
+
+    $apexPartner = Partner::factory()->create([
+        'company_id' => $fx['company']->id,
+        'name'       => 'ApexLogistics',
+    ]);
+
+    $revenueAccount = Account::factory()->create([
+        'code'         => 'REV'.uniqid(),
+        'name'         => 'Product Sales',
+        'account_type' => AccountType::INCOME,
+        'currency_id'  => $fx['currency']->id,
+        'is_group'     => false,
+        'deprecated'   => false,
+    ]);
+    $revenueAccount->companies()->attach($fx['company']->id);
+
+    $revTag = FsTag::query()->create([
+        'company_id' => $fx['company']->id,
+        'account_id' => $revenueAccount->id,
+        'code'       => 'FS-MANUAL-REV',
+        'name'       => 'Operating Revenue',
+        'is_active'  => true,
+    ]);
+
+    // Filename has normalized target and no explicit FS tag code
+    $ingestion = makeRegisteredIngestion($fx['company'], 'INV-2026-99_Apex Global Logistics_1500.00PKR.pdf');
+
+    $classification = app(DriveClassificationService::class)->classify($ingestion);
+
+    expect($classification->validation_status)->toBe(DriveClassificationStatus::Valid)
+        ->and($classification->resolved_partner_id)->toBe($apexPartner->id)
+        ->and($classification->resolved_fs_tag_id)->toBe($revTag->id)
+        ->and($classification->resolved_account_id)->toBe($revenueAccount->id);
+});

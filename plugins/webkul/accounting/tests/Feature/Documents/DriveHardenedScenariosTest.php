@@ -205,6 +205,11 @@ it('isolates per-file failures in discover() so remaining batch files succeed', 
             return $this->inner->listFiles($parentFolderId);
         }
 
+        public function listSubfolders(string $parentFolderId): array
+        {
+            return $this->inner->listSubfolders($parentFolderId);
+        }
+
         public function downloadFileContent(string $fileId): string
         {
             if (str_contains($fileId, '4') || $fileId === 'file-4') {

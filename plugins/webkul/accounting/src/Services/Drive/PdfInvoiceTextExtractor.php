@@ -241,22 +241,24 @@ class PdfInvoiceTextExtractor
             return 'debit_note';
         }
 
-        if (str_contains($lower, 'vendor bill') || str_contains($lower, 'bill to pay') || str_contains($lower, 'purchase invoice')) {
+        if (str_contains($lower, 'vendor bill') || str_contains($lower, 'bill to pay') || str_contains($lower, 'purchase invoice') || str_contains($lower, 'supplier invoice') || str_contains($lower, 'payable to')) {
             return 'vendor_bill';
         }
 
-        if (str_contains($lower, 'tax invoice') || str_contains($lower, 'sales invoice') || str_contains($lower, 'customer invoice')) {
+        if (str_contains($lower, 'tax invoice') || str_contains($lower, 'sales invoice') || str_contains($lower, 'customer invoice') || str_contains($lower, 'commercial invoice') || str_contains($lower, 'e-invoice')) {
             return 'customer_invoice';
         }
 
-        // "Bill To" (addressed to a customer, billing them) is a genuine,
-        // unambiguous signal distinct from the bare word "invoice" -- this
-        // app's own real customer-invoice PDF template says only "Invoice
-        // ID #..." as its title (no "tax"/"sales"/"customer" qualifier),
-        // but always renders a "Bill To" label next to the customer's
-        // name, which never appears on a vendor bill's PDF at all.
-        if (str_contains($lower, 'bill to') && str_contains($lower, 'invoice')) {
+        if ((str_contains($lower, 'bill to') || str_contains($lower, 'billed to')) && (str_contains($lower, 'invoice') || str_contains($lower, 'amount due') || str_contains($lower, 'remit payment'))) {
             return 'customer_invoice';
+        }
+
+        if (str_contains($lower, '#inv-') || str_contains($lower, 'inv-') || str_contains($lower, 'invoice')) {
+            return 'customer_invoice';
+        }
+
+        if (str_contains($lower, '#bill-') || str_contains($lower, 'bill-') || str_contains($lower, 'bill')) {
+            return 'vendor_bill';
         }
 
         return null;
@@ -264,21 +266,37 @@ class PdfInvoiceTextExtractor
 
     private function extractInvoiceNumber(string $text): ?string
     {
-        $patterns = [
-            '/(?:Invoice|Bill|Inv|Reference|Doc|Credit\s*Note|Refund)\s*(?:ID|No|Number|#)?[:\s#]+([A-Z0-9\-\/]+)/i',
-            '/\b(INV[-_\/][0-9]{4}[-_\/][0-9]{3,6})\b/i',
-            '/\b(BILL[-_\/][0-9]{4}[-_\/][0-9]{3,6})\b/i',
-            '/\b(RBILL[-_\/][0-9]{4}[-_\/][0-9]{3,6})\b/i',
-            '/\b(CN[-_\/][0-9]{4}[-_\/][0-9]{3,6})\b/i',
-        ];
+        // 1. Explicit document code patterns like #INV-TEST-001, INV-2026-001, BILL/2026/001, CN-1234
+        if (preg_match('/#\s*((?:INV|BILL|CN|DN|RBILL)[-_A-Z0-9\/]{2,})/i', $text, $m)) {
+            return trim($m[1], " \t\n\r\0\x0B/-#");
+        }
 
-        foreach ($patterns as $pattern) {
-            if (preg_match($pattern, $text, $m)) {
-                $val = trim($m[1], " \t\n\r\0\x0B/-#");
-                if (strlen($val) >= 3 && ! is_numeric($val)) {
+        if (preg_match('/\b((?:INV|BILL|CN|DN|RBILL)[-_A-Z0-9\/]{3,})\b/i', $text, $m)) {
+            return trim($m[1], " \t\n\r\0\x0B/-#");
+        }
+
+        if (preg_match('/#([A-Z0-9\-_]{3,})/i', $text, $m)) {
+            $val = trim($m[1], " \t\n\r\0\x0B/-#");
+            if (strlen($val) >= 3 && ! is_numeric($val)) {
+                return $val;
+            }
+        }
+
+        // 2. Labeled patterns like "Invoice #: INV-001" or "Invoice Number: 10023"
+        if (preg_match_all('/(?:Invoice|Bill|Inv|Reference|Doc|Credit\s*Note|Refund)\s*(?:ID|No|Number|#)\s*[:#]?\s*([A-Z0-9\-\/]+)/i', $text, $matches)) {
+            foreach ($matches[1] as $candidate) {
+                $val = trim($candidate, " \t\n\r\0\x0B/-#");
+                if (strlen($val) >= 3) {
                     return $val;
                 }
-                if (is_numeric($val) && strlen($val) >= 3) {
+            }
+        }
+
+        // 3. Loose fallback pattern
+        if (preg_match_all('/(?:Invoice|Bill|Inv)\s*[:#]\s*([A-Z0-9\-\/]+)/i', $text, $matches)) {
+            foreach ($matches[1] as $candidate) {
+                $val = trim($candidate, " \t\n\r\0\x0B/-#");
+                if (strlen($val) >= 3) {
                     return $val;
                 }
             }
@@ -419,13 +437,13 @@ class PdfInvoiceTextExtractor
         $currencyPrefix = '(?:\s*[-:\s]\s*)?(?:[A-Z]{3}|\$|€|£|Rs\.?)?\s*';
 
         $subtotal = $this->extractAmount($text, [
-            '/Subtotal'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
-            '/Untaxed\s*Amount'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
-            '/Net\s*Amount'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
+            '/Subtotal[:\s]*[\r\n]*'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
+            '/Untaxed\s*Amount[:\s]*[\r\n]*'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
+            '/Net\s*Amount[:\s]*[\r\n]*'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
         ]);
 
         $taxAmount = $this->extractAmount($text, [
-            '/(?:Sales\s*Tax|GST|VAT|Tax)\s*(?:Amount)?'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
+            '/(?:Sales\s*Tax|GST|VAT|Tax)\s*(?:\([^\)]*\))?[:\s]*[\r\n]*'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
         ]);
 
         $taxRate = null;
@@ -434,14 +452,19 @@ class PdfInvoiceTextExtractor
         }
 
         $discount = $this->extractAmount($text, [
-            '/Discount'.$currencyPrefix.'-?([0-9,]+(?:\.[0-9]{1,4})?)/i',
+            '/Discount[:\s]*[\r\n]*'.$currencyPrefix.'-?([0-9,]+(?:\.[0-9]{1,4})?)/i',
         ]);
 
         $total = $this->extractAmount($text, [
-            '/\bGrand\s*Total'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
-            '/\bTotal\s*Amount'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
-            '/(?<!Sub)\bTotal'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
+            '/\b(?:Amount|Balance|Net|Total)\s*Due[:\s]*[\r\n]*'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)(?!-[0-9]{2})/i',
+            '/\bGrand\s*Total[:\s]*[\r\n]*'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
+            '/\bTotal\s*Amount[:\s]*[\r\n]*'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
+            '/(?<!Sub)\bTotal[:\s]*[\r\n]*'.$currencyPrefix.'([0-9,]+(?:\.[0-9]{1,4})?)/i',
         ]);
+
+        if ($total === null && $subtotal !== null) {
+            $total = round($subtotal + ($taxAmount ?? 0.0) - ($discount ?? 0.0), 2);
+        }
 
         return [
             'subtotal'        => $subtotal,

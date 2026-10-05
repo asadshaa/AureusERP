@@ -72,37 +72,37 @@ class DriveClassificationService
                             $issues[] = 'Extracted line items or subtotals do not mathematically balance with the grand total.';
                         }
 
-                        if ($pdfData['document_type_candidate'] && $extracted['document_type'] === DriveDocumentType::Unknown) {
+                        if ($pdfData['document_type_candidate']) {
                             $extracted['document_type'] = match ($pdfData['document_type_candidate']) {
                                 'customer_invoice' => DriveDocumentType::CustomerInvoice,
                                 'vendor_bill'      => DriveDocumentType::VendorBill,
                                 'credit_note'      => DriveDocumentType::CreditNote,
                                 'debit_note'       => DriveDocumentType::DebitNote,
-                                default            => DriveDocumentType::Unknown,
+                                default            => $extracted['document_type'],
                             };
                         }
 
-                        if ($pdfData['invoice_number'] && ! $extracted['invoice_number']) {
+                        if ($pdfData['invoice_number']) {
                             $extracted['invoice_number'] = $pdfData['invoice_number'];
                         }
 
-                        if ($pdfData['partner_name'] && ! $extracted['partner_name']) {
+                        if ($pdfData['partner_name']) {
                             $extracted['partner_name'] = $pdfData['partner_name'];
                         }
 
-                        if ($pdfData['total_amount'] !== null && $extracted['amount'] === null) {
+                        if ($pdfData['total_amount'] !== null) {
                             $extracted['amount'] = (string) $pdfData['total_amount'];
                         }
 
-                        if ($pdfData['currency_code'] && ! $extracted['currency_code']) {
+                        if ($pdfData['currency_code']) {
                             $extracted['currency_code'] = $pdfData['currency_code'];
                         }
 
-                        if ($pdfData['invoice_date'] && ! $extracted['date']) {
+                        if ($pdfData['invoice_date']) {
                             $extracted['date'] = $pdfData['invoice_date'];
                         }
 
-                        if (! empty($pdfData['fs_tag_code']) && ! $extracted['fs_tag_code']) {
+                        if (! empty($pdfData['fs_tag_code'])) {
                             $extracted['fs_tag_code'] = $pdfData['fs_tag_code'];
                         }
 
@@ -154,7 +154,7 @@ class DriveClassificationService
         }
 
         $partner = $this->resolvePartner($ingestion->company_id, $extracted['partner_name'], $issues, $isInvoiceLike, $extracted['document_type']);
-        $fsTag = $this->resolveFsTag($ingestion->company_id, $extracted['fs_tag_code'], $issues, $isInvoiceLike);
+        $fsTag = $this->resolveFsTag($ingestion->company_id, $extracted['fs_tag_code'], $issues, $isInvoiceLike, $extracted['document_type']);
         $account = $this->resolveAccount($fsTag, $ingestion->company_id, $issues, $isInvoiceLike);
         $this->validateExtractedDate($ingestion, $extracted, $issues, $isInvoiceLike);
 
@@ -304,7 +304,8 @@ class DriveClassificationService
                 continue;
             }
 
-            if ($partnerName === null && preg_match('/^[A-Za-z][A-Za-z0-9]*$/', $segment)) {
+            $stopWords = ['invoice', 'inv', 'bill', 'test', 'sample', 'draft', 'doc', 'document', 'stmt', 'statement', 'pay', 'payment', 'credit', 'debit', 'receipt', 'vendor', 'customer'];
+            if ($partnerName === null && preg_match('/^[A-Za-z][A-Za-z0-9]*$/', $segment) && ! in_array(strtolower($segment), $stopWords, true)) {
                 $partnerName = $segment;
             }
         }
@@ -336,10 +337,62 @@ class DriveClassificationService
             return null;
         }
 
+        $clean = trim($partnerName);
+
+        // 1. Direct LIKE match
         $matches = Partner::query()
             ->where('company_id', $companyId)
-            ->where('name', 'like', "%{$partnerName}%")
+            ->where('name', 'like', "%{$clean}%")
             ->get();
+
+        // 2. Exact case-insensitive match
+        if ($matches->count() === 0) {
+            $exact = Partner::query()
+                ->where('company_id', $companyId)
+                ->whereRaw('LOWER(name) = ?', [strtolower($clean)])
+                ->first();
+
+            if ($exact) {
+                $matches = collect([$exact]);
+            }
+        }
+
+        // 3. Normalized alphanumeric match (e.g. "Apex Global Logistics" matches "ApexLogistics")
+        if ($matches->count() === 0) {
+            $targetNorm = strtolower(preg_replace('/[^a-zA-Z0-9]/', '', $clean));
+            if (strlen($targetNorm) >= 3) {
+                $companyPartners = Partner::query()->where('company_id', $companyId)->get();
+                $normMatches = [];
+                foreach ($companyPartners as $p) {
+                    $pNorm = strtolower(preg_replace('/[^a-zA-Z0-9]/', '', $p->name));
+                    if ($pNorm !== '' && ($pNorm === $targetNorm || str_contains($targetNorm, $pNorm) || str_contains($pNorm, $targetNorm))) {
+                        $normMatches[] = $p;
+                    }
+                }
+                if (count($normMatches) === 1) {
+                    $matches = collect($normMatches);
+                }
+            }
+        }
+
+        // 4. Token-based matching on distinctive words
+        if ($matches->count() === 0) {
+            $tokens = array_filter(preg_split('/[^a-zA-Z0-9]+/', $clean), fn ($t) => strlen($t) >= 3);
+            $genericWords = ['global', 'logistics', 'services', 'solutions', 'international', 'enterprises', 'company', 'pvt', 'ltd', 'inc', 'corp', 'llc', 'group', 'supply', 'workspace', 'cloud'];
+            foreach ($tokens as $token) {
+                if (in_array(strtolower($token), $genericWords, true)) {
+                    continue;
+                }
+                $tokenMatches = Partner::query()
+                    ->where('company_id', $companyId)
+                    ->where('name', 'like', "%{$token}%")
+                    ->get();
+                if ($tokenMatches->count() === 1) {
+                    $matches = $tokenMatches;
+                    break;
+                }
+            }
+        }
 
         if ($matches->count() === 0) {
             $issues[] = "No partner matches \"{$partnerName}\" for this company.";
@@ -370,24 +423,70 @@ class DriveClassificationService
     }
 
     /** @param array<int, string> $issues */
-    private function resolveFsTag(int $companyId, ?string $code, array &$issues, bool $required): ?FsTag
-    {
-        if ($code === null || trim($code) === '') {
-            if ($required) {
-                $issues[] = 'No FS Tag code could be extracted from the filename.';
+    private function resolveFsTag(
+        int $companyId,
+        ?string $code,
+        array &$issues,
+        bool $required,
+        DriveDocumentType $documentType = DriveDocumentType::Unknown
+    ): ?FsTag {
+        if ($code !== null && trim($code) !== '') {
+            $tag = $this->fsTags->resolve($companyId, $code);
+            if ($tag) {
+                return $tag;
+            }
+
+            $diagnosis = $this->fsTags->diagnose($companyId, $code);
+            if ($diagnosis) {
+                $issues[] = $diagnosis;
             }
 
             return null;
         }
 
-        $tag = $this->fsTags->resolve($companyId, $code);
-        if ($tag) {
-            return $tag;
+        // Intelligently default FS Tag based on Document Type when not explicitly provided
+        $defaultTag = null;
+        if ($documentType === DriveDocumentType::CustomerInvoice) {
+            $defaultTag = FsTag::query()
+                ->where('company_id', $companyId)
+                ->where('is_active', true)
+                ->whereNotNull('account_id')
+                ->where(function ($q) {
+                    $q->where('code', 'like', '%REV%')
+                        ->orWhere('code', 'like', '%INC%')
+                        ->orWhereHas('account', fn ($acc) => $acc->whereIn('account_type', ['income', 'income_other']));
+                })
+                ->first();
+        } elseif ($documentType === DriveDocumentType::VendorBill) {
+            $defaultTag = FsTag::query()
+                ->where('company_id', $companyId)
+                ->where('is_active', true)
+                ->whereNotNull('account_id')
+                ->where(function ($q) {
+                    $q->where('code', 'like', '%EXP%')
+                        ->orWhere('code', 'like', '%EQUIP%')
+                        ->orWhere('code', 'like', '%MAINT%')
+                        ->orWhereHas('account', fn ($acc) => $acc->whereIn('account_type', ['expense', 'expense_direct_cost', 'expense_depreciation']));
+                })
+                ->first();
         }
 
-        $diagnosis = $this->fsTags->diagnose($companyId, $code);
-        if ($diagnosis) {
-            $issues[] = $diagnosis;
+        if ($defaultTag) {
+            return $defaultTag;
+        }
+
+        $fallbackTag = FsTag::query()
+            ->where('company_id', $companyId)
+            ->where('is_active', true)
+            ->whereNotNull('account_id')
+            ->first();
+
+        if ($fallbackTag) {
+            return $fallbackTag;
+        }
+
+        if ($required) {
+            $issues[] = 'No FS Tag code could be extracted from the document, and no active FS Tag with a valid GL account is configured.';
         }
 
         return null;
