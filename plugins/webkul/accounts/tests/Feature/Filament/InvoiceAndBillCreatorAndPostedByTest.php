@@ -9,6 +9,8 @@ use Webkul\Account\Enums\MoveType;
 use Webkul\Account\Facades\Account as AccountFacade;
 use Webkul\Account\Filament\Resources\BillResource\Pages\ListBills;
 use Webkul\Account\Filament\Resources\InvoiceResource\Pages\ListInvoices;
+use Webkul\Account\Filament\Resources\InvoiceResource\Pages\ViewInvoice;
+use Webkul\Invoice\Models\Invoice;
 use Webkul\PluginManager\Models\Plugin;
 use Webkul\PluginManager\Package;
 use Webkul\Security\Models\User;
@@ -167,4 +169,37 @@ it('allows supervisor to verify, post from table row action, and post in bulk', 
     expect($invoice2->state)->toBe(MoveState::POSTED)
         ->and($invoice2->creator_id)->toBe($operator->id)
         ->and($invoice2->posted_by_id)->toBe($supervisor->id);
+});
+
+it('evaluates infolist audit status cleanly for Invoice and Move models without TypeError', function () {
+    $creator = User::factory()->create(['name' => 'Operator User']);
+    $poster = User::factory()->create(['name' => 'Supervisor User']);
+
+    $move = AccountHelper::invoice(MoveType::OUT_INVOICE);
+    $move->update([
+        'creator_id'   => $creator->id,
+        'posted_by_id' => $poster->id,
+        'posted_at'    => now(),
+        'state'        => MoveState::POSTED,
+    ]);
+
+    FilamentHelper::actingAs([
+        'view_any_account_invoice',
+        'view_account_invoice',
+        'view_any_invoice_invoice',
+        'view_invoice_invoice',
+    ]);
+
+    Livewire::test(ViewInvoice::class, [
+        'record' => $move->id,
+    ])->assertOk();
+
+    if (class_exists(Webkul\Invoice\Filament\Clusters\Customers\Resources\InvoiceResource\Pages\ViewInvoice::class)) {
+        $invoiceModel = Invoice::find($move->id);
+        expect($invoiceModel)->not->toBeNull();
+
+        Livewire::test(Webkul\Invoice\Filament\Clusters\Customers\Resources\InvoiceResource\Pages\ViewInvoice::class, [
+            'record' => $invoiceModel->id,
+        ])->assertOk();
+    }
 });

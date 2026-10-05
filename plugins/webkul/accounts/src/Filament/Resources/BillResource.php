@@ -860,7 +860,7 @@ class BillResource extends Resource
                             ->badge(),
                         TextEntry::make('workflow_status')
                             ->label('Audit Status')
-                            ->state(function (Move $record): string {
+                            ->state(function (Model $record): string {
                                 if ($record->state === MoveState::POSTED) {
                                     $postedName = $record->postedBy?->name ?? 'System';
                                     $postedDate = $record->posted_at?->format('M d, Y H:i') ?? $record->updated_at?->format('M d, Y');
@@ -880,7 +880,7 @@ class BillResource extends Resource
                                 return "Draft created by {$creatorName} — Pending Verification";
                             })
                             ->badge()
-                            ->color(function (Move $record): string {
+                            ->color(function (Model $record): string {
                                 if ($record->state === MoveState::POSTED) {
                                     return 'success';
                                 }
@@ -890,7 +890,7 @@ class BillResource extends Resource
 
                                 return $record->checked ? 'warning' : 'gray';
                             })
-                            ->icon(function (Move $record): string {
+                            ->icon(function (Model $record): string {
                                 if ($record->state === MoveState::POSTED) {
                                     return 'heroicon-m-check-badge';
                                 }
