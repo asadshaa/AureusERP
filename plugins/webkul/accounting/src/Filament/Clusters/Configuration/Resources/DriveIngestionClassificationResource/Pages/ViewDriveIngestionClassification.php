@@ -33,6 +33,14 @@ class ViewDriveIngestionClassification extends ViewRecord
     protected function getHeaderActions(): array
     {
         return [
+            Action::make('openPostedInvoice')
+                ->label(fn () => $this->record->document_type === DriveDocumentType::VendorBill ? 'Open Posted Bill' : 'Open Posted Invoice')
+                ->icon('heroicon-o-arrow-top-right-on-square')
+                ->color('success')
+                ->visible(fn () => (bool) $this->record->created_invoice_id)
+                ->url(fn () => $this->record->getInvoiceUrl())
+                ->openUrlInNewTab(),
+
             Action::make('postToLedger')
                 ->label('Confirm & Post to Ledger')
                 ->icon('heroicon-o-check-badge')

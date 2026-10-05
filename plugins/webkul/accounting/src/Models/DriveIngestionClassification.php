@@ -100,4 +100,23 @@ class DriveIngestionClassification extends Model
     {
         app(DriveInvoicePostingService::class)->handleDecision($this, $request);
     }
+
+    public function getInvoiceUrl(): ?string
+    {
+        if (! $this->created_invoice_id) {
+            return null;
+        }
+
+        try {
+            return match ($this->document_type) {
+                DriveDocumentType::CustomerInvoice => route('filament.admin.invoices.customers.resources.invoices.view', ['record' => $this->created_invoice_id]),
+                DriveDocumentType::VendorBill      => route('filament.admin.invoices.vendors.resources.bills.view', ['record' => $this->created_invoice_id]),
+                DriveDocumentType::CreditNote      => route('filament.admin.invoices.customers.resources.credit-notes.view', ['record' => $this->created_invoice_id]),
+                DriveDocumentType::DebitNote       => route('filament.admin.invoices.vendors.resources.refunds.view', ['record' => $this->created_invoice_id]),
+                default                            => url("/admin/invoices/customers/invoices/{$this->created_invoice_id}"),
+            };
+        } catch (\Throwable) {
+            return url("/admin/invoices/customers/invoices/{$this->created_invoice_id}");
+        }
+    }
 }

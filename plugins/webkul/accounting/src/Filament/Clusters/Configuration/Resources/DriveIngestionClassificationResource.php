@@ -218,7 +218,11 @@ class DriveIngestionClassificationResource extends Resource
                                             ->placeholder('Unresolved'),
                                         TextEntry::make('createdInvoice.name')
                                             ->label('Created Invoice / Move')
-                                            ->placeholder('None Created'),
+                                            ->placeholder('None Created')
+                                            ->url(fn ($record) => $record->getInvoiceUrl())
+                                            ->openUrlInNewTab()
+                                            ->color('primary')
+                                            ->icon('heroicon-o-arrow-top-right-on-square'),
                                         TextEntry::make('posted_at')
                                             ->label('Posted At')
                                             ->dateTime()
@@ -304,14 +308,16 @@ class DriveIngestionClassificationResource extends Resource
                     ->wrap()
                     ->limit(80)
                     ->placeholder('-'),
+                TextColumn::make('createdInvoice.name')
+                    ->label('Posted Move')
+                    ->placeholder('-')
+                    ->url(fn (DriveIngestionClassification $record) => $record->getInvoiceUrl())
+                    ->openUrlInNewTab()
+                    ->color('primary')
+                    ->icon('heroicon-o-arrow-top-right-on-square'),
                 TextColumn::make('created_at')->label('Discovered At')->dateTime()->sortable(),
             ])
-            // Newest first -- with no default sort, a new row could land
-            // anywhere in the list (insertion order), meaning finding it
-            // among a hundred already-processed ones meant scrolling the
-            // whole table. Combined with the navigation badge above, a new
-            // arrival is now both counted in the sidebar and sitting right
-            // at the top when opened.
+            ->recordUrl(fn (DriveIngestionClassification $record) => static::getUrl('view', ['record' => $record]))
             ->defaultSort('created_at', 'desc')
             ->filters([
                 SelectFilter::make('validation_status')->options(collect(DriveClassificationStatus::cases())->mapWithKeys(fn ($case) => [$case->value => $case->getLabel()])->all()),
@@ -319,6 +325,13 @@ class DriveIngestionClassificationResource extends Resource
             ])
             ->recordActions([
                 ViewAction::make(),
+                Action::make('openInvoice')
+                    ->label('Open')
+                    ->icon('heroicon-o-arrow-top-right-on-square')
+                    ->color('success')
+                    ->visible(fn (DriveIngestionClassification $record) => (bool) $record->created_invoice_id)
+                    ->url(fn (DriveIngestionClassification $record) => $record->getInvoiceUrl())
+                    ->openUrlInNewTab(),
                 Action::make('quickPost')
                     ->label('Post to GL')
                     ->icon('heroicon-o-check-badge')
