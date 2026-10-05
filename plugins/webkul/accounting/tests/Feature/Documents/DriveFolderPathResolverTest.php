@@ -45,15 +45,13 @@ beforeEach(function () {
     $this->company = Company::factory()->create(['is_active' => true]);
 });
 
-it('resolves the Invoice template and embeds the attached record\'s sanitized name as the identifier', function () {
-    // Move's factory default name ('MISC/####/####') is genuinely
-    // slash-bearing -- the realistic, common shape of an invoice number
-    // -- which is exactly the value sanitize() exists to handle.
+it('resolves the Invoice template to Customer Invoices folder with Year and Month', function () {
     $move = Move::factory()->create([
-        'name'        => 'INV/2026/00042',
-        'move_type'   => MoveType::OUT_INVOICE,
-        'company_id'  => $this->company->id,
-        'currency_id' => Currency::query()->firstOrFail()->id,
+        'name'         => 'INV/2026/00042',
+        'move_type'    => MoveType::OUT_INVOICE,
+        'company_id'   => $this->company->id,
+        'currency_id'  => Currency::query()->firstOrFail()->id,
+        'invoice_date' => '2026-10-15',
     ]);
     $invoice = AccountingInvoice::query()->findOrFail($move->id);
 
@@ -73,18 +71,19 @@ it('resolves the Invoice template and embeds the attached record\'s sanitized na
     expect($path)->toBe([
         'Aureus',
         "{$this->company->name} ({$this->company->id})",
-        'Accounting',
-        'Invoices',
-        'INV-2026-00042',
+        'Customer Invoices',
+        '2026',
+        '10-October',
     ]);
 });
 
-it('resolves the Bill template with its own identifier, distinct from Invoice', function () {
+it('resolves the Bill template to Vendor Bills folder with Year and Month', function () {
     $move = Move::factory()->create([
-        'name'        => 'BILL/2026/00017',
-        'move_type'   => MoveType::IN_INVOICE,
-        'company_id'  => $this->company->id,
-        'currency_id' => Currency::query()->firstOrFail()->id,
+        'name'         => 'BILL/2026/00017',
+        'move_type'    => MoveType::IN_INVOICE,
+        'company_id'   => $this->company->id,
+        'currency_id'  => Currency::query()->firstOrFail()->id,
+        'invoice_date' => '2026-10-20',
     ]);
     $bill = AccountingBill::query()->findOrFail($move->id);
 
@@ -104,23 +103,19 @@ it('resolves the Bill template with its own identifier, distinct from Invoice', 
     expect($path)->toBe([
         'Aureus',
         "{$this->company->name} ({$this->company->id})",
-        'Accounting',
-        'Bills',
-        'BILL-2026-00017',
+        'Vendor Bills',
+        '2026',
+        '10-October',
     ]);
 });
 
-it('resolves the Journal Entry template with its own identifier, distinct from Invoice and Bill', function () {
-    // Found missing during the Google Drive integration inspection:
-    // JournalEntryResource already supported attaching documents, but
-    // DocumentType had no case of its own for it, so an attached
-    // document always fell through to the generic 'default' template
-    // ("Other Documents") instead of its own "Journal Entries" folder.
+it('resolves the Journal Entry template with Year and Month', function () {
     $move = Move::factory()->create([
         'name'        => 'JE/2026/00042',
         'move_type'   => MoveType::ENTRY,
         'company_id'  => $this->company->id,
         'currency_id' => Currency::query()->firstOrFail()->id,
+        'date'        => '2026-10-05',
     ]);
     $entry = JournalEntry::query()->findOrFail($move->id);
 
@@ -140,23 +135,17 @@ it('resolves the Journal Entry template with its own identifier, distinct from I
     expect($path)->toBe([
         'Aureus',
         "{$this->company->name} ({$this->company->id})",
-        'Accounting',
         'Journal Entries',
-        $this->resolver->sanitize($entry->name),
+        '2026',
+        '10-October',
     ]);
 });
 
-it('resolves the Payment Evidence template to its own "Payments" folder', function () {
-    // Same gap as Journal Entry above, for the Customers/Vendors Payment
-    // resources: PaymentEvidence already existed as a DocumentType, but
-    // had no path template of its own. Unattached here (a fully valid
-    // Payment fixture needs a journal/payment-method-line/outstanding &
-    // destination accounts unrelated to what this test verifies) --
-    // covers the template resolution itself, matching the existing
-    // "falls back to document-{id}" case's own unattached pattern below.
+it('resolves the Payment Evidence template to Supporting Documents folder', function () {
     $document = Document::factory()->create([
         'company_id'    => $this->company->id,
         'document_type' => DocumentType::PaymentEvidence,
+        'created_at'    => '2026-10-05 12:00:00',
     ]);
 
     $path = $this->resolver->resolve($document);
@@ -164,16 +153,17 @@ it('resolves the Payment Evidence template to its own "Payments" folder', functi
     expect($path)->toBe([
         'Aureus',
         "{$this->company->name} ({$this->company->id})",
-        'Accounting',
-        'Payments',
-        "document-{$document->id}",
+        'Supporting Documents',
+        '2026',
+        '10-October',
     ]);
 });
 
-it('resolves the Bank Statement template using the statement\'s own name', function () {
+it('resolves the Bank Statement template with Year and Month', function () {
     $statement = BankStatementFactory::new()->accountingModule([
         'company_id' => $this->company->id,
         'name'       => 'HBL Statement Aug/2026',
+        'date'       => '2026-08-15',
     ])->create();
 
     $document = Document::factory()->create([
@@ -192,16 +182,17 @@ it('resolves the Bank Statement template using the statement\'s own name', funct
     expect($path)->toBe([
         'Aureus',
         "{$this->company->name} ({$this->company->id})",
-        'Accounting',
         'Bank Statements',
-        'HBL Statement Aug-2026',
+        '2026',
+        '08-August',
     ]);
 });
 
-it('falls back to the default template for a document type with no template entry', function () {
+it('falls back to Supporting Documents for a document type with no template entry', function () {
     $document = Document::factory()->create([
         'company_id'    => $this->company->id,
         'document_type' => DocumentType::Other,
+        'created_at'    => '2026-10-05 12:00:00',
     ]);
 
     $path = $this->resolver->resolve($document);
@@ -209,12 +200,13 @@ it('falls back to the default template for a document type with no template entr
     expect($path)->toBe([
         'Aureus',
         "{$this->company->name} ({$this->company->id})",
-        'Accounting',
-        'Other Documents',
+        'Supporting Documents',
     ]);
 });
 
-it('falls back to "document-{id}" as the identifier when the document is not attached to anything', function () {
+it('supports templates with identifier placeholder and falls back to document-id when unattached', function () {
+    Config::set('accounting_drive.path_templates.invoice', ['{company}', 'Custom', '{identifier}']);
+
     $document = Document::factory()->create([
         'company_id'    => $this->company->id,
         'document_type' => DocumentType::Invoice,

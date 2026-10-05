@@ -36,7 +36,7 @@ class ConfirmAction extends Action
             // not HR, not a plain employee, even if they can edit one.
             ->authorize('accounting_post_journal')
             ->action(function (Move $record, Component $livewire): void {
-                $record->checked = $record->journal->auto_check_on_post;
+                $record->checked = (bool) ($record->checked || $record->journal->auto_check_on_post);
 
                 try {
                     $record = AccountFacade::confirmMove($record);

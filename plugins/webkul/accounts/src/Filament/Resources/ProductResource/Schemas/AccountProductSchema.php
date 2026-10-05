@@ -29,8 +29,9 @@ class AccountProductSchema
                 ->relationship(
                     'productTaxes',
                     'name',
-                    modifyQueryUsing: fn ($query) => $query->where('type_tax_use', TypeTaxUse::SALE),
+                    modifyQueryUsing: fn ($query) => $query->where('type_tax_use', TypeTaxUse::SALE)->with('company'),
                 )
+                ->getOptionLabelFromRecordUsing(fn (Tax $record) => "{$record->name} [".($record->company?->name ?? 'Global').'] ('.(float) $record->amount.'%)')
                 ->multiple()
                 ->live()
                 ->searchable()
@@ -97,8 +98,9 @@ class AccountProductSchema
                 ->relationship(
                     'supplierTaxes',
                     'name',
-                    modifyQueryUsing: fn ($query) => $query->where('type_tax_use', TypeTaxUse::PURCHASE),
+                    modifyQueryUsing: fn ($query) => $query->where('type_tax_use', TypeTaxUse::PURCHASE)->with('company'),
                 )
+                ->getOptionLabelFromRecordUsing(fn (Tax $record) => "{$record->name} [".($record->company?->name ?? 'Global').'] ('.(float) $record->amount.'%)')
                 ->multiple()
                 ->live()
                 ->searchable()

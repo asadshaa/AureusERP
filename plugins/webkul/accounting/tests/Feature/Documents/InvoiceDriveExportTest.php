@@ -154,9 +154,12 @@ it('exports a paid invoice or bill to the dedicated Paid Invoices Drive folder',
     $uploadedFile = $this->fakeDrive->files[$sync->drive_file_id];
     expect($uploadedFile['name'])->toContain('-PAID.pdf');
 
-    // Verify the folder in Drive is 'Paid Invoices'
-    $parentFolderId = $sync->drive_parent_folder_id;
-    expect($this->fakeDrive->folders[$parentFolderId]['name'])->toBe('Paid Invoices');
+    // Verify the folder in Drive is 'Paid Invoices' (or partner subfolder under Paid Invoices)
+    $parentFolder = $this->fakeDrive->folders[$sync->drive_parent_folder_id];
+    $paidFolderName = filled($this->invoice->partner?->name)
+        ? $this->fakeDrive->folders[$parentFolder['parent']]['name']
+        : $parentFolder['name'];
+    expect($paidFolderName)->toBe('Paid Invoices');
 });
 
 it('exports a paid vendor bill using Bill document type and bill layout', function () {
@@ -194,6 +197,9 @@ it('exports a paid vendor bill using Bill document type and bill layout', functi
     expect($attachment)->not->toBeNull();
     expect($attachment->document->document_type)->toBe(DocumentType::Bill);
 
-    $parentFolderId = $sync->drive_parent_folder_id;
-    expect($this->fakeDrive->folders[$parentFolderId]['name'])->toBe('Paid Invoices');
+    $parentFolder = $this->fakeDrive->folders[$sync->drive_parent_folder_id];
+    $paidFolderName = filled($bill->partner?->name)
+        ? $this->fakeDrive->folders[$parentFolder['parent']]['name']
+        : $parentFolder['name'];
+    expect($paidFolderName)->toBe('Paid Invoices');
 });

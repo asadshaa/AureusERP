@@ -5,6 +5,7 @@ namespace Webkul\Account\Filament\Resources;
 use BackedEnum;
 use Filament\Actions\Action;
 use Filament\Actions\ActionGroup;
+use Filament\Actions\BulkAction;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
@@ -467,6 +468,11 @@ class InvoiceResource extends Resource
                     ->label(__('accounts::filament/resources/invoice.table.columns.created-by'))
                     ->sortable()
                     ->toggleable(isToggledHiddenByDefault: false),
+                TextColumn::make('postedBy.name')
+                    ->placeholder('-')
+                    ->label(__('accounts::filament/resources/invoice.table.columns.posted-by'))
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: false),
                 TextColumn::make('invoice_partner_display_name')
                     ->label(__('accounts::filament/resources/invoice.table.columns.customer'))
                     ->placeholder('-')
@@ -561,8 +567,9 @@ class InvoiceResource extends Resource
                     ->boolean()
                     ->placeholder('-')
                     ->label(__('accounts::filament/resources/invoice.table.columns.checked'))
+                    ->tooltip(fn ($record) => $record?->checked ? 'Verified & ready for supervisor review' : 'Draft pending verification')
                     ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->toggleable(isToggledHiddenByDefault: false),
                 TextColumn::make('date')
                     ->date()
                     ->placeholder('-')
@@ -625,6 +632,12 @@ class InvoiceResource extends Resource
                     ->collapsible(),
                 Tables\Grouping\Group::make('currency.name')
                     ->label(__('accounts::filament/resources/invoice.table.groups.currency'))
+                    ->collapsible(),
+                Tables\Grouping\Group::make('creator.name')
+                    ->label(__('accounts::filament/resources/invoice.table.groups.created-by'))
+                    ->collapsible(),
+                Tables\Grouping\Group::make('postedBy.name')
+                    ->label(__('accounts::filament/resources/invoice.table.groups.posted-by'))
                     ->collapsible(),
                 Tables\Grouping\Group::make('created_at')
                     ->label(__('accounts::filament/resources/invoice.table.groups.created-at'))
@@ -735,6 +748,56 @@ class InvoiceResource extends Resource
                 ActionGroup::make([
                     ViewAction::make(),
                     EditAction::make(),
+                    Action::make('confirm')
+                        ->label('Post entry')
+                        ->icon('heroicon-o-check-circle')
+                        ->color('primary')
+                        ->authorize('accounting_post_journal')
+                        ->visible(fn (Model $record): bool => $record->state === MoveState::DRAFT)
+                        ->requiresConfirmation()
+                        ->modalHeading(fn (Model $record) => "Post {$record->name}")
+                        ->modalDescription('Are you sure you want to post this invoice to the General Ledger? This will commit the debits and credits and record you as the poster.')
+                        ->modalSubmitActionLabel('Yes, Post Entry')
+                        ->action(function (Model $record) {
+                            $record->checked = (bool) ($record->checked || $record->journal->auto_check_on_post);
+                            try {
+                                AccountFacade::confirmMove($record);
+                                Notification::make()
+                                    ->success()
+                                    ->title("{$record->name} posted successfully.")
+                                    ->send();
+                            } catch (\Throwable $e) {
+                                Notification::make()
+                                    ->danger()
+                                    ->title('Failed to post entry')
+                                    ->body($e->getMessage())
+                                    ->send();
+                            }
+                        }),
+                    Action::make('mark_checked')
+                        ->label('Mark as Verified')
+                        ->icon('heroicon-o-check-badge')
+                        ->color('warning')
+                        ->visible(fn (Model $record): bool => $record->state === MoveState::DRAFT && ! $record->checked)
+                        ->action(function (Model $record) {
+                            $record->update(['checked' => true]);
+                            Notification::make()
+                                ->success()
+                                ->title("{$record->name} marked as verified and ready for review.")
+                                ->send();
+                        }),
+                    Action::make('unmark_checked')
+                        ->label('Unmark Verified')
+                        ->icon('heroicon-o-x-circle')
+                        ->color('gray')
+                        ->visible(fn (Model $record): bool => $record->state === MoveState::DRAFT && $record->checked)
+                        ->action(function (Model $record) {
+                            $record->update(['checked' => false]);
+                            Notification::make()
+                                ->info()
+                                ->title("{$record->name} reset to unverified draft.")
+                                ->send();
+                        }),
                     DeleteAction::make()
                         ->hidden(fn (Model $record): bool => $record->state == MoveState::POSTED)
                         // hidden() only hides the button; before() is the server-side
@@ -757,6 +820,45 @@ class InvoiceResource extends Resource
             ])
             ->toolbarActions([
                 BulkActionGroup::make([
+                    BulkAction::make('post_selected')
+                        ->label('Post selected')
+                        ->icon('heroicon-o-check-badge')
+                        ->color('primary')
+                        ->authorize('accounting_post_journal')
+                        ->requiresConfirmation()
+                        ->modalHeading('Post Selected Draft Invoices')
+                        ->modalDescription('Are you sure you want to post the selected draft invoices to the General Ledger? Only draft invoices will be processed.')
+                        ->modalSubmitActionLabel('Yes, Post Selected')
+                        ->action(function (Collection $records) {
+                            $count = 0;
+                            $errors = [];
+                            foreach ($records as $record) {
+                                if ($record->state !== MoveState::DRAFT) {
+                                    continue;
+                                }
+                                try {
+                                    $record->checked = (bool) ($record->checked || $record->journal->auto_check_on_post);
+                                    AccountFacade::confirmMove($record);
+                                    $count++;
+                                } catch (\Throwable $e) {
+                                    $errors[] = "{$record->name}: {$e->getMessage()}";
+                                }
+                            }
+                            if ($count > 0) {
+                                Notification::make()
+                                    ->success()
+                                    ->title("{$count} invoices posted to General Ledger.")
+                                    ->send();
+                            }
+                            if (! empty($errors)) {
+                                Notification::make()
+                                    ->danger()
+                                    ->title('Some invoices failed to post')
+                                    ->body(implode('; ', array_slice($errors, 0, 3)))
+                                    ->send();
+                            }
+                        })
+                        ->deselectRecordsAfterCompletion(),
                     DeleteBulkAction::make()
                         ->before(function (Collection $records, DeleteBulkAction $action): void {
                             if ($records->contains(fn (Model $record): bool => $record->state == MoveState::POSTED)) {
@@ -812,8 +914,51 @@ class InvoiceResource extends Resource
                     ->schema([
                         TextEntry::make('payment_state')
                             ->badge(),
+                        TextEntry::make('workflow_status')
+                            ->label('Audit Status')
+                            ->state(function (Move $record): string {
+                                if ($record->state === MoveState::POSTED) {
+                                    $postedName = $record->postedBy?->name ?? 'System';
+                                    $postedDate = $record->posted_at?->format('M d, Y H:i') ?? $record->updated_at?->format('M d, Y');
+
+                                    return "Posted by {$postedName} on {$postedDate}";
+                                }
+
+                                if ($record->state === MoveState::CANCEL) {
+                                    return 'Cancelled';
+                                }
+
+                                $creatorName = $record->creator?->name ?? 'User';
+                                if ($record->checked) {
+                                    return "Verified by {$creatorName} — Ready for Posting";
+                                }
+
+                                return "Draft created by {$creatorName} — Pending Verification";
+                            })
+                            ->badge()
+                            ->color(function (Move $record): string {
+                                if ($record->state === MoveState::POSTED) {
+                                    return 'success';
+                                }
+                                if ($record->state === MoveState::CANCEL) {
+                                    return 'danger';
+                                }
+
+                                return $record->checked ? 'warning' : 'gray';
+                            })
+                            ->icon(function (Move $record): string {
+                                if ($record->state === MoveState::POSTED) {
+                                    return 'heroicon-m-check-badge';
+                                }
+                                if ($record->state === MoveState::CANCEL) {
+                                    return 'heroicon-m-x-circle';
+                                }
+
+                                return $record->checked ? 'heroicon-m-clipboard-document-check' : 'heroicon-m-pencil-square';
+                            }),
                     ])
-                    ->compact(),
+                    ->compact()
+                    ->columns(2),
 
                 Section::make(__('accounts::filament/resources/invoice.infolist.section.general.title'))
                     ->icon('heroicon-o-document-text')
@@ -1100,6 +1245,12 @@ class InvoiceResource extends Resource
                                         IconEntry::make('checked')
                                             ->label(__('accounts::filament/resources/invoice.infolist.tabs.other-information.fieldset.accounting.entries.checked'))
                                             ->boolean(),
+                                        TextEntry::make('creator.name')
+                                            ->placeholder('-')
+                                            ->label(__('accounts::filament/resources/invoice.infolist.tabs.other-information.fieldset.accounting.entries.created-by')),
+                                        TextEntry::make('postedBy.name')
+                                            ->placeholder('-')
+                                            ->label(__('accounts::filament/resources/invoice.infolist.tabs.other-information.fieldset.accounting.entries.posted-by')),
                                     ])
                                     ->columns(2),
                             ])
@@ -1295,6 +1446,7 @@ class InvoiceResource extends Resource
                             $record?->taxes()->pluck('accounts_taxes.id')->map(fn ($id) => (int) $id)->all() ?? [],
                         ),
                     )
+                    ->getOptionLabelFromRecordUsing(fn (Tax $record) => "{$record->name} (".(float) $record->amount.'%)')
                     ->rules([Tax::taxValidationRule(TypeTaxUse::SALE)])
                     ->wrapOptionLabels(false)
                     ->searchable()
@@ -1368,7 +1520,26 @@ class InvoiceResource extends Resource
 
         $set('price_unit', round($priceUnit, 2));
 
-        $set('taxes', $product->productTaxes->pluck('id')->toArray());
+        $companyId = $get('../../company_id') ?? $get('company_id') ?? Auth::user()?->default_company_id;
+
+        $productTaxIds = $product->productTaxes()
+            ->when($companyId, fn ($q) => $q->where('accounts_taxes.company_id', $companyId))
+            ->pluck('accounts_taxes.id')
+            ->toArray();
+
+        if (empty($productTaxIds) && $companyId) {
+            $defaultTax = Tax::where('company_id', $companyId)
+                ->where('type_tax_use', TypeTaxUse::SALE)
+                ->where('is_active', true)
+                ->orderBy('sort')
+                ->first();
+
+            if ($defaultTax) {
+                $productTaxIds = [$defaultTax->id];
+            }
+        }
+
+        $set('taxes', $productTaxIds);
 
         $uomQuantity = static::calculateUnitQuantity($get('uom_id'), $get('quantity'));
 

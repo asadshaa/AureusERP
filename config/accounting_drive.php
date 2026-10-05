@@ -81,7 +81,7 @@ return [
     | follow the separate path_templates hierarchy below.
     |
     */
-    'unify_invoice_and_inbound_folders' => env('ACCOUNTING_DRIVE_UNIFY_INVOICE_FOLDERS', true),
+    'unify_invoice_and_inbound_folders' => env('ACCOUNTING_DRIVE_UNIFY_INVOICE_FOLDERS', false),
 
     /*
     |--------------------------------------------------------------------------
@@ -102,19 +102,18 @@ return [
     |
     | The deterministic-but-not-hardcoded mapping DriveFolderPathResolver
     | reads. Each entry is a list of path SEGMENTS relative to the root
-    | folder above; {company} and {identifier} are resolved per-document
-    | by the resolver. Keyed by DocumentType value; 'default' covers any
-    | type without its own entry. Change this to change the convention --
-    | nothing else in the codebase hardcodes these paths.
+    | folder above; {company}, {year}, {month} and {identifier} are resolved
+    | per-document by the resolver. Keyed by DocumentType value; 'default'
+    | covers any type without its own entry.
     |
     */
     'path_templates' => [
-        DocumentType::Invoice->value         => ['{company}', 'Accounting', 'Invoices', '{identifier}'],
-        DocumentType::Bill->value            => ['{company}', 'Accounting', 'Bills', '{identifier}'],
-        DocumentType::JournalEntry->value    => ['{company}', 'Accounting', 'Journal Entries', '{identifier}'],
-        DocumentType::PaymentEvidence->value => ['{company}', 'Accounting', 'Payments', '{identifier}'],
-        DocumentType::BankStatement->value   => ['{company}', 'Accounting', 'Bank Statements', '{identifier}'],
-        'default'                            => ['{company}', 'Accounting', 'Other Documents'],
+        DocumentType::Invoice->value         => ['{company}', 'Customer Invoices', '{year}', '{month}'],
+        DocumentType::Bill->value            => ['{company}', 'Vendor Bills', '{year}', '{month}'],
+        DocumentType::JournalEntry->value    => ['{company}', 'Journal Entries', '{year}', '{month}'],
+        DocumentType::PaymentEvidence->value => ['{company}', 'Supporting Documents', '{year}', '{month}'],
+        DocumentType::BankStatement->value   => ['{company}', 'Bank Statements', '{year}', '{month}'],
+        'default'                            => ['{company}', 'Supporting Documents'],
     ],
 
 ];

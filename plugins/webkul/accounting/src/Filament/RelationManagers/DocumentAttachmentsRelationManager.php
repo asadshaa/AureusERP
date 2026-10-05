@@ -72,7 +72,7 @@ class DocumentAttachmentsRelationManager extends RelationManager
 
     public static function getEloquentQuery(Builder $query): Builder
     {
-        return $query->with(['document.currentVersion', 'document.creator']);
+        return $query->with(['document.currentVersion', 'document.creator', 'document.driveSync']);
     }
 
     public function form(Schema $schema): Schema
@@ -95,6 +95,16 @@ class DocumentAttachmentsRelationManager extends RelationManager
                     ->label('Status')
                     ->badge()
                     ->color(fn (DocumentStatus $state): string => $state === DocumentStatus::Active ? 'success' : 'gray'),
+                TextColumn::make('document.driveSync.status')
+                    ->label('Drive status')
+                    ->badge()
+                    ->color(fn ($state): string => match ($state?->value ?? $state) {
+                        'synced'  => 'success',
+                        'pending' => 'warning',
+                        'failed'  => 'danger',
+                        default   => 'gray',
+                    })
+                    ->placeholder('Not synced'),
                 TextColumn::make('document.currentVersion.original_filename')
                     ->label('File'),
                 TextColumn::make('note')
@@ -152,6 +162,14 @@ class DocumentAttachmentsRelationManager extends RelationManager
                             Notification::make()->danger()->title('Could not download this document')->body($e->getMessage())->send();
                         }
                     }),
+
+                Action::make('openInDrive')
+                    ->label('Drive')
+                    ->icon('heroicon-o-arrow-top-right-on-square')
+                    ->color('gray')
+                    ->visible(fn (DocumentAttachment $record): bool => (bool) ($record->document?->driveSync?->drive_file_id))
+                    ->url(fn (DocumentAttachment $record): string => "https://drive.google.com/file/d/{$record->document->driveSync->drive_file_id}/view")
+                    ->openUrlInNewTab(),
 
                 // Rows here are DocumentAttachments, so the resolver hands
                 // the action the Document they point at. Wiring it on the

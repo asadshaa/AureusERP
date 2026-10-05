@@ -58,3 +58,8 @@ Thumbs.db
 
 # Local HTTPS dev setup (mkcert/caddy binaries, generated cert + private key)
 /.dev-tools/
+
+# Scratch & test folders
+/scratch/
+/test-invoices/
+

@@ -130,6 +130,8 @@ class Move extends Model implements Sortable
         'rate_source',
         'rate_type',
         'conversion_status',
+        'posted_by_id',
+        'posted_at',
     ];
 
     protected function getLogAttributeLabels(): array
@@ -158,6 +160,7 @@ class Move extends Model implements Sortable
             'fiscalPosition.name'      => __('accounts::models/move.log-attributes.fiscal-position'),
             'invoicePaymentTerm.name'  => __('accounts::models/move.log-attributes.invoice-payment-term'),
             'invoiceCashRounding.name' => __('accounts::models/move.log-attributes.invoice-cash-rounding'),
+            'postedBy.name'            => 'Posted By',
         ];
     }
 
@@ -181,6 +184,7 @@ class Move extends Model implements Sortable
         'date'                              => 'date',
         'exchange_rate'                     => 'decimal:15',
         'rate_date'                         => 'date',
+        'posted_at'                         => 'datetime',
     ];
 
     public $typeReverseMapping = [
@@ -311,6 +315,11 @@ class Move extends Model implements Sortable
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'creator_id');
+    }
+
+    public function postedBy(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'posted_by_id');
     }
 
     public function source()

@@ -12,6 +12,8 @@ use Webkul\Security\Database\Seeders\DatabaseSeeder as SecurityDatabaseSeeder;
 use Webkul\Support\Database\Seeders\DatabaseSeeder as SupportDatabaseSeeder;
 use Webkul\TimeOff\Database\Seeders\LeaveWorkflowSeeder;
 
+require_once __DIR__.'/LogisticsCompanyAndProductSeeder.php';
+
 class DatabaseSeeder extends Seeder
 {
     /**
@@ -31,6 +33,7 @@ class DatabaseSeeder extends Seeder
             RecruitmentWorkflowSeeder::class,
             ClaimsWorkflowSeeder::class,
             SensitiveChangeWorkflowSeeder::class,
+            LogisticsCompanyAndProductSeeder::class,
         ]);
     }
 }

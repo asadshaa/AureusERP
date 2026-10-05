@@ -89,6 +89,10 @@ class AccountManager
 
         $record->posted_before = true;
 
+        $record->posted_by_id = Auth::id() ?? $record->posted_by_id ?? $record->creator_id;
+
+        $record->posted_at = now();
+
         $record->save();
 
         // Invoice-type moves don't have their balancing tax/payable/receivable
@@ -103,7 +107,12 @@ class AccountManager
         $totalBalance = $record->lines->sum(fn ($line) => (float) $line->balance);
 
         if (! float_is_zero($totalBalance, precisionRounding: $record->currency->rounding)) {
-            $record->update(['state' => MoveState::DRAFT, 'posted_before' => $wasPostedBefore]);
+            $record->update([
+                'state'         => MoveState::DRAFT,
+                'posted_before' => $wasPostedBefore,
+                'posted_by_id'  => null,
+                'posted_at'     => null,
+            ]);
 
             throw new Exception(__('accounts::account-manager.post-action-validate.unbalanced-entry'));
         }
@@ -209,6 +218,10 @@ class AccountManager
         $record->state = MoveState::DRAFT;
 
         $record->payment_state = PaymentState::NOT_PAID;
+
+        $record->posted_by_id = null;
+
+        $record->posted_at = null;
 
         $record->save();
 

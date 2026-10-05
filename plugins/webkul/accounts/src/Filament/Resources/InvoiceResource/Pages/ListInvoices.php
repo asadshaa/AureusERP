@@ -5,6 +5,7 @@ namespace Webkul\Account\Filament\Resources\InvoiceResource\Pages;
 use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Auth;
 use Webkul\Account\Enums\MoveState;
 use Webkul\Account\Enums\PaymentState;
 use Webkul\Account\Filament\Resources\InvoiceResource;
@@ -20,6 +21,32 @@ class ListInvoices extends ListRecords
     public function getPresetTableViews(): array
     {
         return [
+            'ready_for_review' => PresetView::make(__('accounts::filament/resources/invoice/pages/list-invoice.tabs.ready-for-review'))
+                ->favorite()
+                ->icon('heroicon-s-clipboard-document-check')
+                ->badge(function () {
+                    $query = static::getResource()::getEloquentQuery();
+
+                    return $query
+                        ->where('state', MoveState::DRAFT)
+                        ->where('checked', true)
+                        ->count() ?: null;
+                })
+                ->badgeColor('warning')
+                ->modifyQueryUsing(fn (Builder $query) => $query->where('state', MoveState::DRAFT)->where('checked', true)),
+            'my_drafts' => PresetView::make(__('accounts::filament/resources/invoice/pages/list-invoice.tabs.my-drafts'))
+                ->favorite()
+                ->icon('heroicon-s-user')
+                ->badge(function () {
+                    $query = static::getResource()::getEloquentQuery();
+
+                    return $query
+                        ->where('state', MoveState::DRAFT)
+                        ->where('creator_id', Auth::id())
+                        ->count() ?: null;
+                })
+                ->badgeColor('gray')
+                ->modifyQueryUsing(fn (Builder $query) => $query->where('state', MoveState::DRAFT)->where('creator_id', Auth::id())),
             'draft' => PresetView::make(__('accounts::filament/resources/invoice/pages/list-invoice.tabs.draft'))
                 ->favorite()
                 ->icon('heroicon-s-stop')

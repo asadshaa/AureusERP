@@ -70,9 +70,9 @@ it('creates a Drive folder path and file the first time a document is exported',
         ->and($sync->drive_file_id)->not->toBeNull()
         ->and($sync->last_synced_checksum)->toBe($document->currentVersion->checksum_sha256);
 
-    // Aureus / {Company} / Accounting / Other Documents -- 4 nested
+    // Aureus / {Company} / Supporting Documents -- 3 nested
     // folders, per config/accounting_drive.php's 'default' template.
-    expect($this->fakeDrive->folders)->toHaveCount(4);
+    expect($this->fakeDrive->folders)->toHaveCount(3);
     $rootFolder = collect($this->fakeDrive->folders)->firstWhere('name', 'Aureus');
     expect($rootFolder)->not->toBeNull();
 

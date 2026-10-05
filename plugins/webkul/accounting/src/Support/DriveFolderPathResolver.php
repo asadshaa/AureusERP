@@ -2,7 +2,9 @@
 
 namespace Webkul\Accounting\Support;
 
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
+use Throwable;
 use Webkul\Accounting\Enums\DocumentType;
 use Webkul\Accounting\Models\Document;
 use Webkul\Support\Models\Company;
@@ -93,10 +95,33 @@ class DriveFolderPathResolver
     private function fillPlaceholder(string $segment, Document $document): string
     {
         return match ($segment) {
-            '{company}'    => $this->companySegmentFor($document),
-            '{identifier}' => $this->identifierFor($document),
-            default        => $segment,
+            '{company}'      => $this->companySegmentFor($document),
+            '{company_name}' => $this->sanitize($document->company?->name ?? 'Unknown company'),
+            '{identifier}'   => $this->identifierFor($document),
+            '{year}'         => $this->resolveDate($document)->format('Y'),
+            '{month}'        => $this->resolveDate($document)->format('m-F'),
+            default          => $segment,
         };
+    }
+
+    public function resolveDate(Document $document): Carbon
+    {
+        $attachable = $document->attachments()->with('attachable')->first()?->attachable;
+
+        if ($attachable instanceof Model) {
+            $rawDate = $attachable->getAttribute('invoice_date')
+                ?? $attachable->getAttribute('date')
+                ?? $attachable->getAttribute('created_at');
+
+            if ($rawDate) {
+                try {
+                    return Carbon::parse($rawDate);
+                } catch (Throwable) {
+                }
+            }
+        }
+
+        return $document->created_at ? Carbon::parse($document->created_at) : now();
     }
 
     /**
