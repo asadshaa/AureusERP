@@ -2,6 +2,7 @@
 
 namespace Webkul\Support\Filament\Pages;
 
+use Carbon\Carbon;
 use Exception;
 use Filament\Actions\Action;
 use Filament\Auth\MultiFactor\Contracts\MultiFactorAuthenticationProvider;
@@ -20,12 +21,17 @@ use Filament\Schemas\Components\Section;
 use Filament\Schemas\Components\Utilities\Set;
 use Filament\Schemas\Schema;
 use Illuminate\Contracts\Auth\Authenticatable;
-use Webkul\Support\Filament\Clusters\Settings;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
+use Webkul\Employee\Models\Employee;
+use Webkul\Support\Filament\Clusters\Settings;
+use Webkul\TimeOff\Enums\State;
+use Webkul\TimeOff\Models\Leave;
+use Webkul\TimeOff\Models\LeaveAllocation;
+use Webkul\TimeOff\Models\LeaveType;
 
 class Profile extends Page implements HasForms
 {
@@ -68,75 +74,159 @@ class Profile extends Page implements HasForms
 
     public function editProfileForm(Schema $schema): Schema
     {
+        $user = $this->getUser();
+        $employee = $user->employee ?? Employee::where('user_id', $user->id)->first();
+
+        $sections = [
+            Section::make(__('support::filament/pages/profile.information_section'))
+                ->description(__('support::filament/pages/profile.information_description'))
+                ->icon('heroicon-o-user')
+                ->schema([
+                    FileUpload::make('avatar')
+                        ->label(__('support::filament/pages/profile.fields.avatar'))
+                        ->avatar()
+                        ->directory('users/avatars')
+                        ->visibility('public')
+                        ->disk('public')
+                        ->acceptedFileTypes(['image/jpeg', 'image/jpg', 'image/png', 'image/webp'])
+                        ->maxSize(2048)
+                        ->image()
+                        ->imageEditor()
+                        ->imageEditorAspectRatioOptions([
+                            '1:1',
+                        ])
+                        ->columnSpanFull()
+                        ->helperText(__('support::filament/pages/profile.fields.avatar').': '.__('support::filament/pages/profile.information_description'))
+                        ->deletable(true)
+                        ->downloadable(false),
+
+                    Grid::make(2)
+                        ->schema([
+                            TextInput::make('name')
+                                ->label(__('support::filament/pages/profile.fields.name'))
+                                ->required()
+                                ->maxLength(255)
+                                ->autocomplete('name')
+                                ->validationAttribute(__('support::filament/pages/profile.fields.name'))
+                                ->rules(['required', 'string', 'max:255'])
+                                ->live(onBlur: true)
+                                ->afterStateUpdated(function ($state, Set $set) {
+                                    $set('name', trim($state));
+                                }),
+
+                            TextInput::make('email')
+                                ->label(__('support::filament/pages/profile.fields.email'))
+                                ->email()
+                                ->required()
+                                ->maxLength(255)
+                                ->unique(table: 'users', column: 'email', ignoreRecord: true)
+                                ->autocomplete('email')
+                                ->validationAttribute(__('support::filament/pages/profile.fields.email'))
+                                ->rules(['required', 'email', 'max:255'])
+                                ->live(onBlur: true)
+                                ->afterStateUpdated(function ($state, Set $set) {
+                                    $set('email', strtolower(trim($state)));
+                                }),
+
+                            Select::make('language')
+                                ->label(__('support::filament/pages/profile.fields.language'))
+                                ->options(collect(config('app.supported_locales', []))
+                                    ->mapWithKeys(fn ($meta, $code) => [
+                                        $code => ($meta['native'] ?? $code).' ('.($meta['label'] ?? $code).')',
+                                    ])
+                                    ->all())
+                                ->default(config('app.locale'))
+                                ->native(false)
+                                ->searchable()
+                                ->selectablePlaceholder(false)
+                                ->helperText(__('support::filament/pages/profile.fields.language_helper'))
+                                ->columnSpanFull(),
+                        ]),
+                ]),
+        ];
+
+        if ($employee) {
+            $sections[] = Section::make('Employment Profile (ERP Record)')
+                ->description('Your official employee records and organization placement in the ERP system.')
+                ->icon('heroicon-o-identification')
+                ->collapsible()
+                ->schema([
+                    Grid::make(3)
+                        ->schema([
+                            TextInput::make('employee_number')
+                                ->label('Employee ID / Code')
+                                ->disabled()
+                                ->dehydrated(false),
+
+                            TextInput::make('job_title')
+                                ->label('Job Position / Title')
+                                ->disabled()
+                                ->dehydrated(false),
+
+                            TextInput::make('department')
+                                ->label('Department')
+                                ->disabled()
+                                ->dehydrated(false),
+
+                            TextInput::make('line_manager')
+                                ->label('Reporting Line Manager')
+                                ->disabled()
+                                ->dehydrated(false),
+
+                            TextInput::make('work_location')
+                                ->label('Work Location')
+                                ->disabled()
+                                ->dehydrated(false),
+
+                            TextInput::make('joining_date')
+                                ->label('Date of Joining')
+                                ->disabled()
+                                ->dehydrated(false),
+                        ]),
+                ]);
+
+            $sections[] = Section::make('Personal & Emergency Contact Details')
+                ->description('Update your direct contact information. Changes saved here will immediately reflect upon your ERP employee records.')
+                ->icon('heroicon-o-phone')
+                ->collapsible()
+                ->schema([
+                    Grid::make(2)
+                        ->schema([
+                            TextInput::make('work_phone')
+                                ->label('Work Phone')
+                                ->tel()
+                                ->maxLength(50),
+
+                            TextInput::make('mobile_phone')
+                                ->label('Mobile Phone')
+                                ->tel()
+                                ->maxLength(50),
+
+                            TextInput::make('private_email')
+                                ->label('Personal / Private Email')
+                                ->email()
+                                ->maxLength(255),
+
+                            TextInput::make('emergency_contact')
+                                ->label('Emergency Contact Name')
+                                ->maxLength(255),
+
+                            TextInput::make('emergency_relationship')
+                                ->label('Emergency Relationship')
+                                ->placeholder('e.g. Spouse, Parent, Sibling')
+                                ->maxLength(100),
+
+                            TextInput::make('emergency_phone')
+                                ->label('Emergency Contact Phone')
+                                ->tel()
+                                ->maxLength(50),
+                        ]),
+                ]);
+        }
+
         return $schema
-            ->components([
-                Section::make(__('support::filament/pages/profile.information_section'))
-                    ->description(__('support::filament/pages/profile.information_description'))
-                    ->icon('heroicon-o-user')
-                    ->schema([
-                        FileUpload::make('avatar')
-                            ->label(__('support::filament/pages/profile.fields.avatar'))
-                            ->avatar()
-                            ->directory('users/avatars')
-                            ->visibility('public')
-                            ->disk('public')
-                            ->acceptedFileTypes(['image/jpeg', 'image/jpg', 'image/png', 'image/webp'])
-                            ->maxSize(2048)
-                            ->image()
-                            ->imageEditor()
-                            ->imageEditorAspectRatioOptions([
-                                '1:1',
-                            ])
-                            ->columnSpanFull()
-                            ->helperText(__('support::filament/pages/profile.fields.avatar').': '.__('support::filament/pages/profile.information_description'))
-                            ->deletable(true)
-                            ->downloadable(false),
-
-                        Grid::make(2)
-                            ->schema([
-                                TextInput::make('name')
-                                    ->label(__('support::filament/pages/profile.fields.name'))
-                                    ->required()
-                                    ->maxLength(255)
-                                    ->autocomplete('name')
-                                    ->validationAttribute(__('support::filament/pages/profile.fields.name'))
-                                    ->rules(['required', 'string', 'max:255'])
-                                    ->live(onBlur: true)
-                                    ->afterStateUpdated(function ($state, Set $set) {
-                                        $set('name', trim($state));
-                                    }),
-
-                                TextInput::make('email')
-                                    ->label(__('support::filament/pages/profile.fields.email'))
-                                    ->email()
-                                    ->required()
-                                    ->maxLength(255)
-                                    ->unique(table: 'users', column: 'email', ignoreRecord: true)
-                                    ->autocomplete('email')
-                                    ->validationAttribute(__('support::filament/pages/profile.fields.email'))
-                                    ->rules(['required', 'email', 'max:255'])
-                                    ->live(onBlur: true)
-                                    ->afterStateUpdated(function ($state, Set $set) {
-                                        $set('email', strtolower(trim($state)));
-                                    }),
-
-                                Select::make('language')
-                                    ->label(__('support::filament/pages/profile.fields.language'))
-                                    ->options(collect(config('app.supported_locales', []))
-                                        ->mapWithKeys(fn ($meta, $code) => [
-                                            $code => ($meta['native'] ?? $code).' ('.($meta['label'] ?? $code).')',
-                                        ])
-                                        ->all())
-                                    ->default(config('app.locale'))
-                                    ->native(false)
-                                    ->searchable()
-                                    ->selectablePlaceholder(false)
-                                    ->helperText(__('support::filament/pages/profile.fields.language_helper'))
-                                    ->columnSpanFull(),
-                            ]),
-                    ]),
-            ])
-            ->model($this->getUser())
+            ->components($sections)
+            ->model($user)
             ->statePath('profileData')
             ->operation('edit');
     }
@@ -228,11 +318,40 @@ class Profile extends Page implements HasForms
 
             $user->save();
 
+            $employee = $user->employee ?? Employee::where('user_id', $user->id)->first();
+            if ($employee) {
+                $empFill = [
+                    'name'       => trim($data['name']),
+                    'work_email' => strtolower(trim($data['email'])),
+                ];
+
+                if (array_key_exists('work_phone', $data)) {
+                    $empFill['work_phone'] = $data['work_phone'];
+                }
+                if (array_key_exists('mobile_phone', $data)) {
+                    $empFill['mobile_phone'] = $data['mobile_phone'];
+                }
+                if (array_key_exists('private_email', $data)) {
+                    $empFill['private_email'] = $data['private_email'];
+                }
+                if (array_key_exists('emergency_contact', $data)) {
+                    $empFill['emergency_contact'] = $data['emergency_contact'];
+                }
+                if (array_key_exists('emergency_relationship', $data)) {
+                    $empFill['emergency_relationship'] = $data['emergency_relationship'];
+                }
+                if (array_key_exists('emergency_phone', $data)) {
+                    $empFill['emergency_phone'] = $data['emergency_phone'];
+                }
+
+                $employee->update($empFill);
+            }
+
             $languageChanged = isset($fill['language']) && $fill['language'] !== $previousLanguage;
 
             if ($languageChanged) {
                 app()->setLocale($fill['language']);
-                
+
                 session()->put('locale', $fill['language']);
             }
 
@@ -343,6 +462,23 @@ class Profile extends Page implements HasForms
 
         if (empty($userData['language'])) {
             $userData['language'] = app()->getLocale();
+        }
+
+        $employee = $user->employee ?? Employee::with(['department', 'job', 'parent', 'workLocation'])->where('user_id', $user->id)->first();
+        if ($employee) {
+            $userData['employee_number'] = $employee->employee_number ?? ('EMP-'.str_pad($employee->id, 4, '0', STR_PAD_LEFT));
+            $userData['job_title'] = $employee->job_title ?? $employee->job?->name ?? '—';
+            $userData['department'] = $employee->department?->name ?? '—';
+            $userData['line_manager'] = $employee->parent?->name ?? 'Not Assigned';
+            $userData['work_location'] = $employee->workLocation?->name ?? 'Head Office';
+            $userData['joining_date'] = $employee->joining_date ? Carbon::parse($employee->joining_date)->format('d M Y') : '—';
+
+            $userData['work_phone'] = $employee->work_phone;
+            $userData['mobile_phone'] = $employee->mobile_phone;
+            $userData['private_email'] = $employee->private_email;
+            $userData['emergency_contact'] = $employee->emergency_contact;
+            $userData['emergency_relationship'] = $employee->emergency_relationship;
+            $userData['emergency_phone'] = $employee->emergency_phone;
         }
 
         $this->editProfileForm->fill($userData);
@@ -487,8 +623,66 @@ class Profile extends Page implements HasForms
 
     protected function getViewData(): array
     {
+        $user = $this->getUser();
+        $employee = $user->employee ?? Employee::where('user_id', $user->id)->first();
+        $leaveSummary = null;
+
+        if ($employee) {
+            $companyId = (int) ($employee->company_id ?? $user->default_company_id ?? 1);
+            $endOfYear = Carbon::now()->endOfYear();
+
+            $leaveTypes = LeaveType::query()
+                ->where('is_active', true)
+                ->where(function ($q) use ($companyId): void {
+                    $q->whereNull('company_id')
+                        ->orWhere('company_id', $companyId);
+                })
+                ->orderBy('name')
+                ->get();
+
+            $cards = [];
+            $totalAllocated = 0.0;
+            $totalTaken = 0.0;
+
+            foreach ($leaveTypes as $type) {
+                $allocated = (float) LeaveAllocation::where('employee_id', $employee->id)
+                    ->where('holiday_status_id', $type->id)
+                    ->where('state', State::VALIDATE_TWO->value)
+                    ->where(function ($q) use ($endOfYear) {
+                        $q->where('date_to', '<=', $endOfYear)
+                            ->orWhereNull('date_to');
+                    })
+                    ->sum('number_of_days');
+
+                $taken = (float) Leave::where('employee_id', $employee->id)
+                    ->where('holiday_status_id', $type->id)
+                    ->where('state', State::VALIDATE_TWO->value)
+                    ->sum('number_of_days');
+
+                $left = max(0, round($allocated - $taken, 1));
+                $totalAllocated += $allocated;
+                $totalTaken += $taken;
+
+                $cards[] = [
+                    'name'      => $type->name,
+                    'allocated' => $allocated,
+                    'taken'     => $taken,
+                    'left'      => $left,
+                ];
+            }
+
+            $leaveSummary = [
+                'total_allocated' => $totalAllocated,
+                'total_taken'     => $totalTaken,
+                'total_left'      => max(0, round($totalAllocated - $totalTaken, 1)),
+                'cards'           => $cards,
+            ];
+        }
+
         return [
-            'user' => $this->getUser(),
+            'user'         => $user,
+            'employee'     => $employee,
+            'leaveSummary' => $leaveSummary,
         ];
     }
 

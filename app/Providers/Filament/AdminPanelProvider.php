@@ -2,6 +2,7 @@
 
 namespace App\Providers\Filament;
 
+use App\Filament\Widgets\EmployeeDashboardOverviewWidget;
 use App\Filament\Widgets\PendingActionsCenterWidget;
 use App\Filament\Widgets\TodayAttendanceRollCallWidget;
 use App\Http\Middleware\ApplyBrandSettings;
@@ -69,6 +70,7 @@ class AdminPanelProvider extends PanelProvider
             ->widgets([
                 PendingActionsCenterWidget::class,
                 TodayAttendanceRollCallWidget::class,
+                EmployeeDashboardOverviewWidget::class,
             ])
             ->plugins([
                 ManufacturingPlugin::make(),
