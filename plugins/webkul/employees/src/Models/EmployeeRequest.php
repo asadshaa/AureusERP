@@ -106,6 +106,15 @@ class EmployeeRequest extends Model
             $request->requested_by ??= Auth::id();
             $request->company_id ??= $request->employee?->company_id;
             $request->currency_id ??= $request->company?->currency_id;
+
+            if (blank($request->title)) {
+                $payload = (array) ($request->payload ?? []);
+                $dateStr = $payload['formatted_date'] ?? $payload['attendance_date'] ?? null;
+                $typeName = $request->requestType?->name ?? 'Employee Request';
+                $request->title = $dateStr
+                    ? "{$typeName} - {$dateStr}"
+                    : "{$typeName} - ".now()->format('d M Y');
+            }
         });
 
         static::saving(function (EmployeeRequest $model): void {

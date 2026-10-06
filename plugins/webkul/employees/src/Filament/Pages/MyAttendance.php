@@ -470,7 +470,9 @@ class MyAttendance extends Page
             ->schema([
                 DateTimePicker::make('requested_check_in')->seconds(false),
                 DateTimePicker::make('requested_check_out')->seconds(false),
-                Textarea::make('reason')->label('Reason for the change')->required(),
+                Textarea::make('reason')
+                    ->label('Reason for the change (optional)')
+                    ->placeholder('e.g. Traffic delay, badge issue, forgot to clock in'),
             ])
             ->fillForm(function (array $arguments): array {
                 $record = $this->ownRecord($arguments['record'] ?? null);
@@ -511,7 +513,9 @@ class MyAttendance extends Page
                     ->minDate(now()->subDays(30)->toDateString())->maxDate(now()->toDateString()),
                 DateTimePicker::make('check_in')->seconds(false)->required(),
                 DateTimePicker::make('check_out')->seconds(false),
-                Textarea::make('reason')->label('Reason')->required(),
+                Textarea::make('reason')
+                    ->label('Reason (optional)')
+                    ->placeholder('e.g. Forgot to clock in, badge failure'),
             ])
             ->action(function (array $data): void {
                 $employee = app(GeofencedAttendanceService::class)->resolveEmployee(Auth::user());

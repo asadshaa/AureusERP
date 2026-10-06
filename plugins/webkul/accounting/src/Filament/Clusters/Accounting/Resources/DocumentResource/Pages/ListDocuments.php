@@ -5,6 +5,7 @@ namespace Webkul\Accounting\Filament\Clusters\Accounting\Resources\DocumentResou
 use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Filament\Resources\Pages\ListRecords;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Auth;
 use Throwable;
 use Webkul\Accounting\Enums\DocumentType;
@@ -26,13 +27,20 @@ class ListDocuments extends ListRecords
                 ->schema(DocumentResource::uploadFormSchema())
                 ->action(function (array $data): void {
                     try {
+                        $file = $data['file'];
+                        $title = filled($data['title'] ?? null)
+                            ? $data['title']
+                            : ($file instanceof UploadedFile
+                                ? pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME)
+                                : (is_string($file) ? pathinfo($file, PATHINFO_FILENAME) : 'Uploaded Document'));
+
                         app(DocumentService::class)->upload(
                             Auth::user(),
                             Auth::user()->default_company_id,
                             DocumentType::from($data['document_type']),
-                            $data['title'],
+                            $title,
                             $data['description'] ?? null,
-                            $data['file'],
+                            $file,
                             request()->ip(),
                         );
 

@@ -84,9 +84,10 @@ class DocumentResource extends Resource
                 ->required()
                 ->native(false),
             TextInput::make('title')
-                ->required()
-                ->maxLength(255),
+                ->maxLength(255)
+                ->placeholder('Optional -- defaults to filename if empty'),
             Textarea::make('description')
+                ->label('Description (optional)')
                 ->columnSpanFull(),
             FileUpload::make('file')
                 ->label('File')

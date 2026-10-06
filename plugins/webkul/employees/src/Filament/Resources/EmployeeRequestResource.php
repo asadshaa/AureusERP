@@ -422,12 +422,11 @@ class EmployeeRequestResource extends Resource
                     ->searchable(),
             ]),
             TextInput::make('title')
-                ->required()
                 ->maxLength(255)
                 ->columnSpanFull()
-                ->placeholder(fn (Get $get): string => $isAttendance($get) ? 'e.g. Attendance time change for Sunday' : 'Request title'),
+                ->placeholder(fn (Get $get): string => $isAttendance($get) ? 'e.g. Attendance time change for Sunday (optional -- auto-generated if left blank)' : 'Request title (optional -- auto-generated if left blank)'),
             Textarea::make('description')
-                ->label(fn (Get $get): string => $isAttendance($get) ? 'Reason for attendance adjustment' : 'Description / Notes')
+                ->label(fn (Get $get): string => $isAttendance($get) ? 'Reason for attendance adjustment (optional)' : 'Description / Notes (optional)')
                 ->columnSpanFull(),
 
             Section::make('Attendance Details')
@@ -619,43 +618,49 @@ class EmployeeRequestResource extends Resource
 
     public static function formatAttendancePayload(array $data): array
     {
-        if (! isset($data['payload']) || ! is_array($data['payload'])) {
-            return $data;
-        }
+        if (isset($data['payload']) && is_array($data['payload'])) {
+            $payload = $data['payload'];
+            $dateStr = $payload['attendance_date'] ?? null;
 
-        $payload = $data['payload'];
-        $dateStr = $payload['attendance_date'] ?? null;
+            if ($dateStr) {
+                $carbonDate = Carbon::parse($dateStr);
+                $payload['day_of_week'] = $carbonDate->format('l');
+                $payload['formatted_date'] = $carbonDate->format('d M Y');
 
-        if ($dateStr) {
-            $carbonDate = Carbon::parse($dateStr);
-            $payload['day_of_week'] = $carbonDate->format('l');
-            $payload['formatted_date'] = $carbonDate->format('d M Y');
+                $inTime = $payload['requested_check_in_time'] ?? null;
+                $outTime = $payload['requested_check_out_time'] ?? null;
 
-            $inTime = $payload['requested_check_in_time'] ?? null;
-            $outTime = $payload['requested_check_out_time'] ?? null;
+                if ($inTime) {
+                    $payload['requested']['check_in'] = Carbon::parse("{$dateStr} {$inTime}")->toDateTimeString();
+                } elseif (isset($payload['requested']['check_in']) && strlen($payload['requested']['check_in']) <= 8) {
+                    $payload['requested']['check_in'] = Carbon::parse("{$dateStr} {$payload['requested']['check_in']}")->toDateTimeString();
+                }
 
-            if ($inTime) {
-                $payload['requested']['check_in'] = Carbon::parse("{$dateStr} {$inTime}")->toDateTimeString();
-            } elseif (isset($payload['requested']['check_in']) && strlen($payload['requested']['check_in']) <= 8) {
-                $payload['requested']['check_in'] = Carbon::parse("{$dateStr} {$payload['requested']['check_in']}")->toDateTimeString();
+                if ($outTime) {
+                    $outCarbon = Carbon::parse("{$dateStr} {$outTime}");
+                    if ($inTime && $outCarbon->lt(Carbon::parse("{$dateStr} {$inTime}"))) {
+                        $outCarbon->addDay();
+                    }
+                    $payload['requested']['check_out'] = $outCarbon->toDateTimeString();
+                } elseif (isset($payload['requested']['check_out']) && strlen($payload['requested']['check_out']) <= 8) {
+                    $outCarbon = Carbon::parse("{$dateStr} {$payload['requested']['check_out']}");
+                    if (isset($payload['requested']['check_in']) && $outCarbon->lt(Carbon::parse($payload['requested']['check_in']))) {
+                        $outCarbon->addDay();
+                    }
+                    $payload['requested']['check_out'] = $outCarbon->toDateTimeString();
+                }
             }
 
-            if ($outTime) {
-                $outCarbon = Carbon::parse("{$dateStr} {$outTime}");
-                if ($inTime && $outCarbon->lt(Carbon::parse("{$dateStr} {$inTime}"))) {
-                    $outCarbon->addDay();
-                }
-                $payload['requested']['check_out'] = $outCarbon->toDateTimeString();
-            } elseif (isset($payload['requested']['check_out']) && strlen($payload['requested']['check_out']) <= 8) {
-                $outCarbon = Carbon::parse("{$dateStr} {$payload['requested']['check_out']}");
-                if (isset($payload['requested']['check_in']) && $outCarbon->lt(Carbon::parse($payload['requested']['check_in']))) {
-                    $outCarbon->addDay();
-                }
-                $payload['requested']['check_out'] = $outCarbon->toDateTimeString();
-            }
+            $data['payload'] = $payload;
         }
 
-        $data['payload'] = $payload;
+        if (blank($data['title'] ?? null)) {
+            $typeName = isset($data['request_type_id'])
+                ? EmployeeRequestType::find($data['request_type_id'])?->name
+                : 'Employee Request';
+            $datePart = $data['payload']['formatted_date'] ?? now()->format('d M Y');
+            $data['title'] = "{$typeName} - {$datePart}";
+        }
 
         return $data;
     }

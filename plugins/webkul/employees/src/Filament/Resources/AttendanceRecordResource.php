@@ -265,7 +265,9 @@ class AttendanceRecordResource extends Resource
                         ->default(fn (AttendanceRecord $record) => $record->check_in),
                     DateTimePicker::make('requested_check_out')->seconds(false)
                         ->default(fn (AttendanceRecord $record) => $record->check_out),
-                    Textarea::make('reason')->label('Reason for the change')->required(),
+                    Textarea::make('reason')
+                        ->label('Reason for the change (optional)')
+                        ->placeholder('e.g. Traffic delay, badge issue, forgot to clock in'),
                 ])
                 ->action(function (AttendanceRecord $record, array $data): void {
                     try {

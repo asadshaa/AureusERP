@@ -47,9 +47,8 @@ class WorkLocationAssignmentsRelationManager extends RelationManager
             DatePicker::make('valid_from')->native(false),
             DatePicker::make('valid_until')->native(false)->afterOrEqual('valid_from'),
             TextInput::make('reason')
-                ->required()
                 ->maxLength(255)
-                ->helperText('For example: "Approved work from home", "Client site - Q4 audit".')
+                ->helperText('Optional. For example: "Approved work from home", "Client site - Q4 audit".')
                 ->columnSpanFull(),
         ])->columns(2);
     }

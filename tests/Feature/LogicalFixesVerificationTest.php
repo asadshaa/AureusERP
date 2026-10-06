@@ -25,6 +25,7 @@ use Webkul\Account\Models\Product;
 use Webkul\Accounting\Enums\ManualAdjustmentStatus;
 use Webkul\Accounting\Models\ManualAdjustment;
 use Webkul\Accounting\Services\ManualAdjustmentService;
+use Webkul\Employee\Models\AttendanceRecord;
 use Webkul\Employee\Models\Employee;
 use Webkul\Employee\Models\EmployeeRequest;
 use Webkul\Employee\Models\EmployeeRequestType;
@@ -462,5 +463,60 @@ class LogicalFixesVerificationTest extends TestCase
             ['check_in' => '09:00:00', 'check_out' => '17:00:00'],
             'Forgot attendance'
         );
+    }
+
+    /**
+     * Fix 9: Title and Reason / Description are optional and auto-defaulted.
+     */
+    public function test_employee_request_title_and_reason_are_optional(): void
+    {
+        $employeeUser = User::factory()->create(['default_company_id' => $this->company->id]);
+        $employee = Employee::create([
+            'company_id' => $this->company->id,
+            'user_id'    => $employeeUser->id,
+            'name'       => 'Optional Fields Employee',
+        ]);
+
+        $requestType = EmployeeRequestType::first() ?? EmployeeRequestType::create([
+            'company_id' => $this->company->id,
+            'name'       => 'Attendance Adjustment',
+            'code'       => 'attendance_adjustment',
+            'category'   => 'attendance',
+            'is_active'  => true,
+        ]);
+
+        // Create EmployeeRequest with null title and null description
+        $request = EmployeeRequest::create([
+            'company_id'      => $this->company->id,
+            'employee_id'     => $employee->id,
+            'request_type_id' => $requestType->id,
+            'status'          => 'draft',
+            'requested_by'    => $employeeUser->id,
+            'title'           => null,
+            'description'     => null,
+        ]);
+
+        $this->assertNotEmpty($request->title);
+        $this->assertStringContainsString($requestType->name, $request->title);
+        $this->assertNull($request->description);
+
+        // Service allows null reason for attendance correction
+        $service = app(EmployeeRequestService::class);
+        $record = AttendanceRecord::create([
+            'employee_id' => $employee->id,
+            'company_id'  => $this->company->id,
+            'check_in'    => '2026-10-01 09:00:00',
+            'check_out'   => '2026-10-01 17:00:00',
+        ]);
+
+        $empRequest = $service->requestAttendanceTimeChange(
+            $record,
+            $employeeUser,
+            ['check_in' => '2026-10-01 09:30:00', 'check_out' => '2026-10-01 17:30:00'],
+            null
+        );
+
+        $this->assertInstanceOf(EmployeeRequest::class, $empRequest);
+        $this->assertNotEmpty($empRequest->title);
     }
 }
