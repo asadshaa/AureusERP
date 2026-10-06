@@ -501,13 +501,13 @@ class PurchaseOrder
                 ->filter()
                 ->unique('id')
                 ->filter(fn ($operation) => ! in_array($operation->state, [
-                        InventoryEnums\OperationState::DONE,
-                        InventoryEnums\OperationState::CANCELED
-                    ])
+                    InventoryEnums\OperationState::DONE,
+                    InventoryEnums\OperationState::CANCELED,
+                ])
                     && in_array($operation->destinationLocation->type, [
                         InventoryEnums\LocationType::INTERNAL,
                         InventoryEnums\LocationType::TRANSIT,
-                        InventoryEnums\LocationType::CUSTOMER
+                        InventoryEnums\LocationType::CUSTOMER,
                     ])
                 );
 
@@ -517,12 +517,12 @@ class PurchaseOrder
                 $operation = $order->operations
                     ->filter(fn ($operation) => ! in_array($operation->state, [
                         InventoryEnums\OperationState::DONE,
-                        InventoryEnums\OperationState::CANCELED
+                        InventoryEnums\OperationState::CANCELED,
                     ])
                     && in_array($operation->destinationLocation->type, [
                         InventoryEnums\LocationType::INTERNAL,
                         InventoryEnums\LocationType::TRANSIT,
-                        InventoryEnums\LocationType::CUSTOMER
+                        InventoryEnums\LocationType::CUSTOMER,
                     ])
                     )
                     ->first();
@@ -684,7 +684,6 @@ class PurchaseOrder
         $moveDestinations = $moveDestinations->filter(
             fn ($move) => $move->state !== InventoryEnums\MoveState::CANCELED && ! $move->isPurchaseReturn()
         );
-
 
         $qtyToPush = $line->product_qty - $qty;
 
@@ -879,6 +878,7 @@ class PurchaseOrder
             'move_type'               => $record->qty_to_invoice >= 0 ? AccountEnums\MoveType::IN_INVOICE : AccountEnums\MoveType::IN_REFUND,
             'invoice_origin'          => $record->name,
             'date'                    => now(),
+            'invoice_date'            => $record->ordered_at?->toDateString() ?? now()->toDateString(),
             'company_id'              => $record->company_id,
             'currency_id'             => $record->currency_id,
             'invoice_payment_term_id' => $record->payment_term_id,
@@ -897,17 +897,25 @@ class PurchaseOrder
 
     public function createAccountMoveLine($accountMove, $orderLine): void
     {
+        $accountMove->loadMissing('company');
+        $expenseAccount = $orderLine->product?->getAccountsFromFiscalPosition($accountMove->fiscalPosition)['expense']
+            ?? $orderLine->product?->propertyAccountExpense
+            ?? $orderLine->product?->category?->propertyAccountExpense;
+
         $accountMoveLine = $accountMove->lines()->create([
             'state'                  => $accountMove->state,
+            'display_type'           => AccountEnums\DisplayType::PRODUCT,
+            'account_id'             => $expenseAccount?->id,
             'name'                   => $orderLine->name,
             'date'                   => $accountMove->date,
+            'invoice_date'           => $accountMove->invoice_date,
             'parent_state'           => $accountMove->state,
             'quantity'               => abs($orderLine->qty_to_invoice),
             'price_unit'             => $orderLine->price_unit,
             'discount'               => $orderLine->discount,
             'company_id'             => $accountMove->company_id,
             'currency_id'            => $accountMove->currency_id,
-            'company_currency_id'    => $accountMove->currency_id,
+            'company_currency_id'    => $accountMove->company?->currency_id ?? $accountMove->currency_id,
             'partner_id'             => $accountMove->partner_id,
             'product_id'             => $orderLine->product_id,
             'uom_id'                 => $orderLine->uom_id,

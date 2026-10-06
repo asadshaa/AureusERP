@@ -24,6 +24,7 @@ use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Webkul\Chatter\Filament\Actions\ActivityTableAction;
 use Webkul\Employee\Services\HrHierarchyService;
@@ -240,12 +241,26 @@ class TimeOffResource extends Resource
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make()
-                        ->successNotification(
-                            Notification::make()
-                                ->success()
-                                ->title(__('time-off::filament/clusters/management/resources/time-off.table.bulk-actions.delete.notification.title'))
-                                ->body(__('time-off::filament/clusters/management/resources/time-off.table.bulk-actions.delete.notification.body'))
-                        ),
+                        ->action(function (Collection $records) {
+                            $deletable = $records->filter(fn (Leave $record) => $record->approvalRequest?->status !== 'pending' && $record->state !== State::VALIDATE_TWO);
+                            $skipped = $records->count() - $deletable->count();
+
+                            $deletable->each(fn (Leave $record) => $record->delete());
+
+                            if ($skipped > 0) {
+                                Notification::make()
+                                    ->warning()
+                                    ->title('Some leave requests could not be deleted')
+                                    ->body("{$skipped} approved or pending leave request(s) were protected and could not be deleted.")
+                                    ->send();
+                            } else {
+                                Notification::make()
+                                    ->success()
+                                    ->title(__('time-off::filament/clusters/management/resources/time-off.table.bulk-actions.delete.notification.title'))
+                                    ->body(__('time-off::filament/clusters/management/resources/time-off.table.bulk-actions.delete.notification.body'))
+                                    ->send();
+                            }
+                        }),
                 ]),
             ]);
     }

@@ -23,6 +23,8 @@ use Webkul\Employee\Models\EmployeeRequestType;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\ApprovalRequest;
 use Webkul\Support\Services\ApprovalEngine;
+use Webkul\TimeOff\Enums\State;
+use Webkul\TimeOff\Models\Leave;
 
 class EmployeeRequestService
 {
@@ -195,6 +197,18 @@ class EmployeeRequestService
             throw new RuntimeException('A record already exists for that day. Request a time change on it instead.');
         }
 
+        if (class_exists(Leave::class)) {
+            $onLeave = Leave::query()
+                ->where('employee_id', $employee->id)
+                ->where('state', State::VALIDATE_TWO)
+                ->whereDate('date_from', '<=', $date->toDateString())
+                ->whereDate('date_to', '>=', $date->toDateString())
+                ->exists();
+            if ($onLeave) {
+                throw new RuntimeException('A missed attendance day cannot be requested on a day the employee has an approved leave.');
+            }
+        }
+
         $times = array_filter(
             array_intersect_key($times, array_flip(['check_in', 'check_out'])),
             fn ($value): bool => filled($value),
@@ -269,11 +283,14 @@ class EmployeeRequestService
             return $request;
         }
         if ($approval->status === 'rejected') {
+            $reason = $approval->decisions->last()?->reason;
             $request->update([
                 'status'           => 'rejected',
                 'rejected_at'      => $approval->completed_at ?? now(),
-                'rejection_reason' => $approval->decisions->last()?->reason,
+                'rejection_reason' => $reason,
             ]);
+
+            $this->notifyDecision($request, 'rejected', $reason);
 
             return $request->fresh();
         }
@@ -288,6 +305,8 @@ class EmployeeRequestService
         if ($request->requestType->category === 'attendance_correction') {
             $this->applyAttendanceTimeChange($request->fresh(['approvalRequest.decisions']));
         }
+
+        $this->notifyDecision($request, 'approved');
 
         return $request->fresh(['approvalRequest', 'accountingMove.lines']);
     }
@@ -655,6 +674,42 @@ class EmployeeRequestService
 
             $notification = FilamentNotification::make()
                 ->warning()
+                ->title($title)
+                ->body($body);
+
+            foreach ($recipients as $recipient) {
+                $recipient->notifyNow($notification->toDatabase());
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+    }
+
+    private function notifyDecision(EmployeeRequest $request, string $decision, ?string $reason = null): void
+    {
+        try {
+            $request->loadMissing(['employee.user', 'requester', 'requestType']);
+            $recipients = collect([$request->requester, $request->employee?->user])
+                ->filter(fn (?User $u): bool => $u && $u->is_active)
+                ->unique('id');
+
+            if ($recipients->isEmpty()) {
+                return;
+            }
+
+            $what = $request->requestType?->name ?? 'Employee Request';
+            $isApproved = $decision === 'approved';
+
+            $title = $isApproved
+                ? "{$what} Approved"
+                : "{$what} Rejected";
+
+            $body = $isApproved
+                ? "Your {$what} ('{$request->title}') has been approved."
+                : "Your {$what} ('{$request->title}') was rejected.".($reason ? " Reason: {$reason}" : '');
+
+            $notification = FilamentNotification::make()
+                ->color($isApproved ? 'success' : 'danger')
                 ->title($title)
                 ->body($body);
 

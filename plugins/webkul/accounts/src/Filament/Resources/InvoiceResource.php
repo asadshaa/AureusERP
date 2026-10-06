@@ -1508,19 +1508,24 @@ class InvoiceResource extends Resource
 
         $priceUnit = static::calculateUnitPrice($product->uom_id, $product);
 
-        if ($get('../../currency_id')) {
+        $companyId = $get('../../company_id') ?? $get('company_id') ?? Auth::user()?->default_company_id;
+        $company = Company::find($companyId) ?? Auth::user()?->defaultCompany;
+        $docDate = $get('../../invoice_date') ?? $get('../../date') ?? now();
+
+        if ($get('../../currency_id') && $company?->currency) {
             $currency = Currency::find($get('../../currency_id'));
 
-            $priceUnit = Auth::user()->defaultCompany->currency->convert(
-                $priceUnit,
-                $currency,
-                Auth::user()->defaultCompany
-            );
+            if ($currency) {
+                $priceUnit = $company->currency->convert(
+                    $priceUnit,
+                    $currency,
+                    $company,
+                    $docDate
+                );
+            }
         }
 
         $set('price_unit', round($priceUnit, 2));
-
-        $companyId = $get('../../company_id') ?? $get('company_id') ?? Auth::user()?->default_company_id;
 
         $productTaxIds = $product->productTaxes()
             ->when($companyId, fn ($q) => $q->where('accounts_taxes.company_id', $companyId))

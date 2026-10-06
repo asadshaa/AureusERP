@@ -6,6 +6,7 @@ use Filament\Notifications\Notification as FilamentNotification;
 use Illuminate\Support\Carbon;
 use RuntimeException;
 use Webkul\Employee\Models\Employee;
+use Webkul\Employee\Services\HrHierarchyService;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\ApprovalRequest;
 use Webkul\Support\Services\ApprovalEngine;
@@ -24,6 +25,7 @@ class LeaveApprovalService
         }
         if (
             (int) $leave->employee->user_id !== (int) $requester->id
+            && ! app(HrHierarchyService::class)->canManage($requester, $leave->employee)
             && ! $requester->can('hr_approve_leave')
         ) {
             throw new RuntimeException('A user can only submit leave for their own HR hierarchy.');
@@ -98,15 +100,20 @@ class LeaveApprovalService
                 'rejected_at'        => null,
                 'rejection_reason'   => null,
             ]);
+
+            $this->notifyDecision($leave, 'approved');
         } elseif ($approval->status === 'rejected') {
+            $reason = $approval->decisions->last()?->reason;
             $leave->update([
                 'state'              => State::REFUSE,
                 'first_approver_id'  => $firstApprover?->id,
                 'second_approver_id' => $lastApprover?->id,
                 'approved_at'        => null,
                 'rejected_at'        => $approval->completed_at ?? now(),
-                'rejection_reason'   => $approval->decisions->last()?->reason,
+                'rejection_reason'   => $reason,
             ]);
+
+            $this->notifyDecision($leave, 'rejected', $reason);
         } elseif ($approval->decisions->isNotEmpty()) {
             $leave->update([
                 'state'             => State::VALIDATE_ONE,
@@ -168,6 +175,43 @@ class LeaveApprovalService
 
             $notification = FilamentNotification::make()
                 ->warning()
+                ->title($title)
+                ->body($body);
+
+            foreach ($recipients as $recipient) {
+                $recipient->notifyNow($notification->toDatabase());
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+    }
+
+    private function notifyDecision(Leave $leave, string $decision, ?string $reason = null): void
+    {
+        try {
+            $leave->loadMissing(['employee.user', 'user', 'holidayStatus']);
+            $recipients = collect([$leave->user, $leave->employee?->user])
+                ->filter(fn (?User $u): bool => $u && $u->is_active)
+                ->unique('id');
+
+            if ($recipients->isEmpty()) {
+                return;
+            }
+
+            $type = $leave->holidayStatus?->name ?? 'Leave';
+            $isApproved = $decision === 'approved';
+
+            $title = $isApproved
+                ? "{$type} Request Approved"
+                : "{$type} Request Rejected";
+
+            $dateInfo = $leave->date_from ? " ({$leave->date_from->toDateString()})" : '';
+            $body = $isApproved
+                ? "Your {$type} request{$dateInfo} has been approved."
+                : "Your {$type} request{$dateInfo} was rejected.".($reason ? " Reason: {$reason}" : '');
+
+            $notification = FilamentNotification::make()
+                ->color($isApproved ? 'success' : 'danger')
                 ->title($title)
                 ->body($body);
 

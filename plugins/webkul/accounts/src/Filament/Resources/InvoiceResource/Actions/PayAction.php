@@ -227,6 +227,9 @@ class PayAction extends Action
                                         ->label(__('accounts::filament/resources/invoice/actions/pay-action.form.fields.amount'))
                                         ->prefix(fn ($record) => $record->currency->symbol ?? '')
                                         ->default($paymentRegister->amount)
+                                        ->numeric()
+                                        ->minValue(0.01)
+                                        ->maxValue(fn (Move $record) => (float) ($record->amount_residual > 0 ? $record->amount_residual : $record->amount_total))
                                         ->required()
                                         ->live(onBlur: true)
                                         ->afterStateUpdated(function (Set $set, $state) use ($paymentRegister) {

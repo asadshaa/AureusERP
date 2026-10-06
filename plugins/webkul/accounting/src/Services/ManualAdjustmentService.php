@@ -141,7 +141,15 @@ class ManualAdjustmentService
                     throw new RuntimeException('Manual adjustment journal is unbalanced.');
                 }
 
-                DB::table('accounts_account_moves')->where('id', $move->id)->update(['state' => MoveState::POSTED->value, 'review_status' => 'posted', 'updated_at' => now()]);
+                DB::table('accounts_account_moves')->where('id', $move->id)->update([
+                    'state'         => MoveState::POSTED->value,
+                    'review_status' => 'posted',
+                    'name'          => $adjustment->adjustment_reference,
+                    'posted_by_id'  => $reviewer->id,
+                    'posted_at'     => now(),
+                    'posted_before' => true,
+                    'updated_at'    => now(),
+                ]);
                 DB::table('accounts_account_move_lines')->where('move_id', $move->id)->update(['parent_state' => MoveState::POSTED->value, 'updated_at' => now()]);
             }
 
