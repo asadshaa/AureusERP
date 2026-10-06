@@ -170,7 +170,7 @@ class LeaveApprovalService
             $dayAndDate = "From {$startDate->format('l, d M Y')} to {$endDate->format('l, d M Y')} ({$leave->number_of_days} days)";
             $reason = $leave->private_name ? " | Note: {$leave->private_name}" : '';
 
-            $title = "Leave Request: {$employee->name}";
+            $title = "{$employee->name} requested time off: {$leaveTypeName}";
             $body = "{$who} submitted {$leaveTypeName} request ({$dayAndDate}){$reason} {$routingNote}";
 
             $notification = FilamentNotification::make()

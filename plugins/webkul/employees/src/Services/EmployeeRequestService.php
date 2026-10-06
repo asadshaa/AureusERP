@@ -669,7 +669,9 @@ class EmployeeRequestService
 
             $reason = $request->description ? " | Note: {$request->description}" : '';
 
-            $title = "{$what} Request: {$employee->name}";
+            $title = ($what === 'Attendance Time Change')
+                ? "{$employee->name} requested attendance time change"
+                : "{$what} Request: {$employee->name}";
             $body = "{$who} submitted {$what}{$dayAndDate}{$timeDetails}{$reason} {$routingNote}";
 
             $notification = FilamentNotification::make()

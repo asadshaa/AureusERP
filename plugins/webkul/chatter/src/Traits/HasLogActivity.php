@@ -9,6 +9,8 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Throwable;
+use Webkul\Employee\Models\Employee;
+use Webkul\Security\Models\User;
 
 trait HasLogActivity
 {
@@ -43,7 +45,7 @@ trait HasLogActivity
      */
     public function logModelActivity(string $event): ?Model
     {
-        $user = Filament::auth()->user() ?? Auth::user();
+        $user = Filament::auth()->user() ?? Auth::user() ?? $this->resolveActivityUser();
 
         try {
             $changes = $this->determineChanges($event);
@@ -347,5 +349,50 @@ trait HasLogActivity
             ]),
             default        => $event
         };
+    }
+
+    protected function resolveActivityUser(): ?Model
+    {
+        if (method_exists($this, 'resolveActivityCauser')) {
+            $causer = $this->resolveActivityCauser();
+            if ($causer instanceof Model) {
+                return $causer;
+            }
+        }
+
+        if ($this->getAttribute('creator_id')) {
+            $creator = User::find($this->getAttribute('creator_id'));
+            if ($creator) {
+                return $creator;
+            }
+        }
+
+        if ($this->getAttribute('user_id')) {
+            $user = User::find($this->getAttribute('user_id'));
+            if ($user) {
+                return $user;
+            }
+        }
+
+        if (method_exists($this, 'employee') && $this->employee) {
+            if ($this->employee->user) {
+                return $this->employee->user;
+            }
+
+            return $this->employee;
+        }
+
+        if ($this->getAttribute('employee_id')) {
+            $employee = Employee::find($this->getAttribute('employee_id'));
+            if ($employee?->user) {
+                return $employee->user;
+            }
+
+            if ($employee) {
+                return $employee;
+            }
+        }
+
+        return null;
     }
 }

@@ -35,6 +35,11 @@ class Leave extends Model
         return __('time-off::models/leave.title');
     }
 
+    public function getNameAttribute(): ?string
+    {
+        return $this->holidayStatus?->name ?? __('time-off::models/leave.title');
+    }
+
     protected $fillable = [
         'user_id',
         'manager_id',

@@ -10,8 +10,12 @@ use Webkul\Chatter\Mail\MessageMail;
 use Webkul\Chatter\Models\Message;
 use Webkul\Chatter\Notifications\ChatterDatabaseNotification;
 use Webkul\Chatter\Support\ChatterMentions;
+use Webkul\Employee\Models\Employee;
+use Webkul\Employees\Models\EmployeeRequest;
 use Webkul\Partner\Models\Partner;
 use Webkul\Security\Models\User;
+use Webkul\TimeOff\Models\Leave;
+use Webkul\TimeOff\Models\LeaveAllocation;
 
 class ChatterNotificationService
 {
@@ -91,7 +95,7 @@ class ChatterNotificationService
         $causerUserId = $this->resolveCauserUserId($message->causer);
         $recordName = $this->resolveRecordName($record);
         $recordUrl = $this->resolveRecordUrl($record);
-        $causerName = $message->causer?->name ?? 'Someone';
+        $causerName = $this->resolveCauserName($message, $record);
 
         $mentionedUserIds = $this->notifyMentions($message, $record, $causerUserId, $causerName, $recordName, $recordUrl);
 
@@ -100,8 +104,6 @@ class ChatterNotificationService
 
             return;
         }
-
-        [$titleKey, $icon, $color] = $this->resolveTypeMeta($message);
 
         $assignedUserId = $this->resolveAssignedUserId($message, $record);
 
@@ -121,11 +123,7 @@ class ChatterNotificationService
             return;
         }
 
-        $title = __($titleKey, ['causer' => $causerName, 'record' => $recordName]);
-
-        $body = $message->type === 'notification'
-            ? ($this->summarizeChanges($message) ?? $this->plainBody($message))
-            : $this->plainBody($message);
+        [$title, $body, $icon, $color] = $this->resolveNotificationPayload($message, $record, $causerName, $recordName);
 
         foreach ($recipients as $user) {
             $user->notify(new ChatterDatabaseNotification($title, $body, $icon, $color, $recordUrl));
@@ -361,8 +359,159 @@ class ChatterNotificationService
         return $from;
     }
 
+    protected function resolveCauserName(Message $message, ?Model $record): string
+    {
+        if (filled($message->causer?->name)) {
+            return (string) $message->causer->name;
+        }
+
+        if ($record) {
+            if (method_exists($record, 'employee') && filled($record->employee?->name)) {
+                return (string) $record->employee->name;
+            }
+
+            if ($record->getAttribute('employee_id')) {
+                $employee = Employee::find($record->getAttribute('employee_id'));
+                if (filled($employee?->name)) {
+                    return (string) $employee->name;
+                }
+            }
+
+            if (method_exists($record, 'creator') && filled($record->creator?->name)) {
+                return (string) $record->creator->name;
+            }
+
+            if ($record->getAttribute('creator_id')) {
+                $creator = User::find($record->getAttribute('creator_id'));
+                if (filled($creator?->name)) {
+                    return (string) $creator->name;
+                }
+            }
+
+            if (method_exists($record, 'user') && filled($record->user?->name)) {
+                return (string) $record->user->name;
+            }
+
+            if ($record->getAttribute('user_id')) {
+                $user = User::find($record->getAttribute('user_id'));
+                if (filled($user?->name)) {
+                    return (string) $user->name;
+                }
+            }
+
+            if (method_exists($record, 'requester') && filled($record->requester?->name)) {
+                return (string) $record->requester->name;
+            }
+
+            if ($record->getAttribute('requested_by')) {
+                $requester = User::find($record->getAttribute('requested_by'));
+                if (filled($requester?->name)) {
+                    return (string) $requester->name;
+                }
+            }
+        }
+
+        return 'A team member';
+    }
+
+    protected function resolveNotificationPayload(
+        Message $message,
+        Model $record,
+        string $causerName,
+        string $recordName
+    ): array {
+        [$titleKey, $icon, $color] = $this->resolveTypeMeta($message);
+
+        if ($record instanceof Leave) {
+            $employeeName = $record->employee?->name ?? $causerName;
+            $days = $record->number_of_days ? ' ('.(float) $record->number_of_days.' days)' : '';
+
+            if ($message->event === 'created') {
+                $title = "{$employeeName} requested time off: {$recordName}";
+                $body = "{$employeeName} requested {$recordName}{$days}.";
+                $icon = 'heroicon-o-calendar-days';
+                $color = 'warning';
+
+                return [$title, $body, $icon, $color];
+            }
+
+            $title = "{$employeeName} updated time off: {$recordName}";
+            $body = $this->summarizeChanges($message) ?? "Time off request ({$recordName}) for {$employeeName} was updated.";
+
+            return [$title, $body, $icon, $color];
+        }
+
+        if ($record instanceof LeaveAllocation) {
+            $employeeName = $record->employee?->name ?? $causerName;
+            $days = $record->number_of_days ? ' ('.(float) $record->number_of_days.' days)' : '';
+
+            if ($message->event === 'created') {
+                $title = "{$employeeName} requested time off: {$recordName}";
+                $body = "A new leave allocation ({$recordName}) was created for {$employeeName}{$days}.";
+                $icon = 'heroicon-o-plus-circle';
+                $color = 'success';
+
+                return [$title, $body, $icon, $color];
+            }
+
+            $title = "{$employeeName} updated leave allocation: {$recordName}";
+            $body = $this->summarizeChanges($message) ?? "Leave allocation ({$recordName}) for {$employeeName} was updated.";
+
+            return [$title, $body, $icon, $color];
+        }
+
+        if ($record instanceof EmployeeRequest) {
+            $employeeName = $record->employee?->name ?? $record->requester?->name ?? $causerName;
+            $kind = $record->payload['kind'] ?? null;
+
+            if ($kind === 'attendance_time_change') {
+                $dateStr = $record->payload['formatted_date'] ?? $record->payload['attendance_date'] ?? '';
+                $title = "{$employeeName} requested attendance time change";
+                $body = "Attendance time change requested for {$employeeName}".($dateStr ? " ({$dateStr})" : '').'.';
+                $icon = 'heroicon-o-clock';
+                $color = 'warning';
+
+                return [$title, $body, $icon, $color];
+            }
+
+            if ($kind === 'attendance_missing_day') {
+                $dateStr = $record->payload['formatted_date'] ?? $record->payload['attendance_date'] ?? '';
+                $title = "{$employeeName} requested missed attendance";
+                $body = "Missed attendance day requested for {$employeeName}".($dateStr ? " ({$dateStr})" : '').'.';
+                $icon = 'heroicon-o-clock';
+                $color = 'warning';
+
+                return [$title, $body, $icon, $color];
+            }
+
+            $title = "{$employeeName} requested {$recordName}";
+            $body = $record->description ?: "Request submitted by {$employeeName}.";
+
+            return [$title, $body, $icon, $color];
+        }
+
+        $title = __($titleKey, ['causer' => $causerName, 'record' => $recordName]);
+        $body = $message->type === 'notification'
+            ? ($this->summarizeChanges($message) ?? $this->plainBody($message))
+            : $this->plainBody($message);
+
+        return [$title, $body, $icon, $color];
+    }
+
     protected function resolveRecordName(mixed $record): string
     {
+        if ($record instanceof Leave) {
+            return $record->holidayStatus?->name ?? 'Time Off';
+        }
+
+        if ($record instanceof LeaveAllocation) {
+            return $record->name ?? $record->holidayStatus?->name ?? 'Leave Allocation';
+        }
+
+        if ($record instanceof EmployeeRequest) {
+            return $record->title ?? $record->requestType?->name ?? 'Employee Request';
+        }
+
         $attribute = property_exists($record, 'recordTitleAttribute') ? $record->recordTitleAttribute : null;
 
         return (string) ($record->name
