@@ -292,7 +292,7 @@ class DriveClassificationService
                 continue;
             }
 
-            if (preg_match('/^FS-?\w+$/i', $segment)) {
+            if (preg_match('/^FS-?[\w\-]+$/i', $segment)) {
                 $fsTagCode = $segment;
 
                 continue;
