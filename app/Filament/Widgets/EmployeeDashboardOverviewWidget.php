@@ -5,8 +5,6 @@ namespace App\Filament\Widgets;
 use Filament\Widgets\Widget;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
-use Webkul\Employee\Filament\Pages\MyAttendance;
 use Webkul\Employee\Models\Employee;
 use Webkul\Support\Filament\Pages\Profile;
 use Webkul\TimeOff\Enums\State;
@@ -37,6 +35,128 @@ class EmployeeDashboardOverviewWidget extends Widget
     }
 
     /**
+     * Calculate canonical employee leave entitlements and remaining balances.
+     * Policy allocation: Total 25 days (12 Annual, 8 Casual, 5 Sick).
+     *
+     * @return array<string, mixed>
+     */
+    public static function calculateCanonicalLeaves(Employee $employee, ?int $companyId = null, ?\DateTimeInterface $endOfYear = null): array
+    {
+        $companyId = $companyId ?? (int) ($employee->company_id ?? 1);
+        $endOfYear = $endOfYear ?? Carbon::now()->endOfYear();
+
+        $leaveTypes = LeaveType::query()
+            ->where('is_active', true)
+            ->where(function ($q) use ($companyId): void {
+                $q->whereNull('company_id')
+                    ->orWhere('company_id', $companyId);
+            })
+            ->get();
+
+        $canonicalSpecs = [
+            'annual' => [
+                'name'       => 'Annual Leave',
+                'allocated'  => 12.0,
+                'keywords'   => ['annual', 'vacation'],
+                'icon'       => 'heroicon-o-sun',
+                'color'      => 'success',
+            ],
+            'casual' => [
+                'name'       => 'Casual Leave',
+                'allocated'  => 8.0,
+                'keywords'   => ['casual'],
+                'icon'       => 'heroicon-o-sparkles',
+                'color'      => 'info',
+            ],
+            'sick' => [
+                'name'       => 'Sick Leave',
+                'allocated'  => 5.0,
+                'keywords'   => ['sick', 'medical'],
+                'icon'       => 'heroicon-o-heart',
+                'color'      => 'danger',
+            ],
+        ];
+
+        $cards = [];
+        $totalAllocated = 0.0;
+        $totalTaken = 0.0;
+        $totalPending = 0.0;
+
+        foreach ($canonicalSpecs as $key => $spec) {
+            $matchingTypeIds = $leaveTypes->filter(function ($lt) use ($spec) {
+                $nameLower = strtolower($lt->name);
+                foreach ($spec['keywords'] as $kw) {
+                    if (str_contains($nameLower, $kw)) {
+                        return true;
+                    }
+                }
+
+                return false;
+            })->pluck('id')->all();
+
+            $dbAllocated = 0.0;
+            if (! empty($matchingTypeIds)) {
+                $dbAllocated = (float) LeaveAllocation::where('employee_id', $employee->id)
+                    ->whereIn('holiday_status_id', $matchingTypeIds)
+                    ->where('state', State::VALIDATE_TWO->value)
+                    ->where(function ($q) use ($endOfYear) {
+                        $q->where('date_to', '<=', $endOfYear)
+                            ->orWhereNull('date_to');
+                    })
+                    ->sum('number_of_days');
+            }
+
+            // Use DB allocation if explicitly assigned, otherwise use the company canonical allocation
+            $allocated = $dbAllocated > 0 ? $dbAllocated : (float) $spec['allocated'];
+
+            $taken = 0.0;
+            if (! empty($matchingTypeIds)) {
+                $taken = (float) Leave::where('employee_id', $employee->id)
+                    ->whereIn('holiday_status_id', $matchingTypeIds)
+                    ->where('state', State::VALIDATE_TWO->value)
+                    ->sum('number_of_days');
+            }
+
+            $pending = 0.0;
+            if (! empty($matchingTypeIds)) {
+                $pending = (float) Leave::where('employee_id', $employee->id)
+                    ->whereIn('holiday_status_id', $matchingTypeIds)
+                    ->whereIn('state', [State::CONFIRM->value, State::VALIDATE_ONE->value])
+                    ->sum('number_of_days');
+            }
+
+            $left = max(0.0, round($allocated - $taken, 1));
+            $pct = $allocated > 0 ? min(100, max(0, (int) round(($left / $allocated) * 100))) : 0;
+
+            $totalAllocated += $allocated;
+            $totalTaken += $taken;
+            $totalPending += $pending;
+
+            $cards[$key] = [
+                'key'        => $key,
+                'name'       => $spec['name'],
+                'allocated'  => $allocated,
+                'taken'      => $taken,
+                'pending'    => $pending,
+                'left'       => $left,
+                'percentage' => $pct,
+                'icon'       => $spec['icon'],
+                'color'      => $spec['color'],
+            ];
+        }
+
+        $totalLeft = max(0.0, round($totalAllocated - $totalTaken, 1));
+
+        return [
+            'total_allocated' => $totalAllocated,
+            'total_taken'     => $totalTaken,
+            'total_pending'   => $totalPending,
+            'total_left'      => $totalLeft,
+            'cards'           => array_values($cards),
+        ];
+    }
+
+    /**
      * @return array<string, mixed>
      */
     protected function getViewData(): array
@@ -46,7 +166,7 @@ class EmployeeDashboardOverviewWidget extends Widget
             return [];
         }
 
-        $employee = $user->employee ?? Employee::with(['department', 'job', 'parent', 'workLocation', 'company'])->where('user_id', $user->id)->first();
+        $employee = $user->employee ?? Employee::with(['department', 'job', 'parent', 'company'])->where('user_id', $user->id)->first();
         if (! $employee) {
             return [];
         }
@@ -54,128 +174,26 @@ class EmployeeDashboardOverviewWidget extends Widget
         $companyId = (int) ($employee->company_id ?? $user->default_company_id ?? 1);
         $endOfYear = Carbon::now()->endOfYear();
 
-        // 1. Employee Profile Details
-        $avatarUrl = $user->avatar ? Storage::disk('public')->url($user->avatar) : null;
-        if (! $avatarUrl && $user->partner?->avatar) {
-            $avatarUrl = Storage::disk('public')->url($user->partner->avatar);
-        }
-
         $name = $employee->name ?? $user->name;
-        $words = preg_split('/\s+/', trim($name));
-        $initials = '';
-        foreach (array_slice($words, 0, 2) as $w) {
-            $initials .= mb_strtoupper(mb_substr($w, 0, 1));
-        }
-        if (empty($initials)) {
-            $initials = 'EM';
-        }
-
-        $joiningDate = $employee->joining_date ? Carbon::parse($employee->joining_date) : null;
-        $tenure = $joiningDate ? $joiningDate->diffForHumans(null, true) : null;
-
         $employeeData = [
-            'id'              => $employee->id,
-            'number'          => $employee->employee_number ?? ('EMP-'.str_pad($employee->id, 4, '0', STR_PAD_LEFT)),
-            'name'            => $name,
-            'initials'        => $initials,
-            'avatar_url'      => $avatarUrl,
-            'job_title'       => $employee->job_title ?? $employee->job?->name ?? 'Employee',
-            'department'      => $employee->department?->name ?? 'General',
-            'manager_name'    => $employee->parent?->name ?? 'Not Assigned',
-            'work_email'      => $employee->work_email ?? $user->email,
-            'work_phone'      => $employee->work_phone ?? $employee->mobile_phone ?? '—',
-            'work_location'   => $employee->workLocation?->name ?? 'Head Office',
-            'joining_date'    => $joiningDate?->format('d M Y'),
-            'tenure'          => $tenure,
-            'employment_type' => ucwords(str_replace('_', ' ', $employee->employment_status ?? $employee->employee_type ?? 'Full Time')),
-            'company_name'    => $employee->company?->name ?? $user->defaultCompany?->name ?? config('app.name'),
+            'id'           => $employee->id,
+            'number'       => $employee->employee_number ?? ('EMP-'.str_pad($employee->id, 4, '0', STR_PAD_LEFT)),
+            'name'         => $name,
+            'job_title'    => $employee->job_title ?? $employee->job?->name ?? 'Employee',
+            'department'   => $employee->department?->name ?? 'General',
+            'manager_name' => $employee->parent?->name ?? 'Not Assigned',
+            'company_name' => $employee->company?->name ?? $user->defaultCompany?->name ?? config('app.name'),
         ];
 
-        // 2. Leave Types & Balances
-        $leaveTypes = LeaveType::query()
-            ->where('is_active', true)
-            ->where(function ($q) use ($companyId): void {
-                $q->whereNull('company_id')
-                    ->orWhere('company_id', $companyId);
-            })
-            ->orderBy('name')
-            ->get();
+        // 25 Days Leave Allocation (12 Annual, 8 Casual, 5 Sick)
+        $leaveData = self::calculateCanonicalLeaves($employee, $companyId, $endOfYear);
 
-        $leaveCards = [];
-        $totalAllocated = 0.0;
-        $totalTaken = 0.0;
-        $totalPending = 0.0;
-
-        foreach ($leaveTypes as $type) {
-            $allocated = (float) LeaveAllocation::where('employee_id', $employee->id)
-                ->where('holiday_status_id', $type->id)
-                ->where('state', State::VALIDATE_TWO->value)
-                ->where(function ($q) use ($endOfYear) {
-                    $q->where('date_to', '<=', $endOfYear)
-                        ->orWhereNull('date_to');
-                })
-                ->sum('number_of_days');
-
-            $taken = (float) Leave::where('employee_id', $employee->id)
-                ->where('holiday_status_id', $type->id)
-                ->where('state', State::VALIDATE_TWO->value)
-                ->sum('number_of_days');
-
-            $pending = (float) Leave::where('employee_id', $employee->id)
-                ->where('holiday_status_id', $type->id)
-                ->whereIn('state', [State::CONFIRM->value, State::VALIDATE_ONE->value])
-                ->sum('number_of_days');
-
-            $left = max(0, round($allocated - $taken, 1));
-            $pct = $allocated > 0 ? min(100, max(0, (int) round(($left / $allocated) * 100))) : 0;
-
-            $totalAllocated += $allocated;
-            $totalTaken += $taken;
-            $totalPending += $pending;
-
-            $lower = strtolower($type->name);
-            $icon = 'heroicon-o-calendar';
-            $theme = 'primary';
-
-            if (str_contains($lower, 'sick')) {
-                $icon = 'heroicon-o-heart';
-                $theme = 'danger';
-            } elseif (str_contains($lower, 'casual')) {
-                $icon = 'heroicon-o-sparkles';
-                $theme = 'warning';
-            } elseif (str_contains($lower, 'annual') || str_contains($lower, 'vacation')) {
-                $icon = 'heroicon-o-sun';
-                $theme = 'success';
-            } elseif (str_contains($lower, 'parental') || str_contains($lower, 'maternity') || str_contains($lower, 'paternity')) {
-                $icon = 'heroicon-o-user-group';
-                $theme = 'info';
-            } elseif (str_contains($lower, 'training') || str_contains($lower, 'study')) {
-                $icon = 'heroicon-o-academic-cap';
-                $theme = 'secondary';
-            }
-
-            $leaveCards[] = [
-                'id'         => $type->id,
-                'name'       => $type->name,
-                'icon'       => $icon,
-                'theme'      => $theme,
-                'allocated'  => $allocated,
-                'taken'      => $taken,
-                'pending'    => $pending,
-                'left'       => $left,
-                'percentage' => $pct,
-            ];
-        }
-
-        $totalLeft = max(0, round($totalAllocated - $totalTaken, 1));
-        $overallPercentage = $totalAllocated > 0 ? min(100, max(0, (int) round(($totalLeft / $totalAllocated) * 100))) : 0;
-
-        // 3. Recent Leave Requests
+        // Recent Leave Requests
         $recentLeaves = Leave::query()
             ->with(['holidayStatus'])
             ->where('employee_id', $employee->id)
             ->orderByDesc('id')
-            ->take(4)
+            ->take(3)
             ->get()
             ->map(function (Leave $l): array {
                 $type = $l->holidayStatus?->name ?? 'Leave';
@@ -188,7 +206,7 @@ class EmployeeDashboardOverviewWidget extends Widget
                 $statusLabel = match ($stateValue) {
                     'validate_two' => 'Approved',
                     'validate_one' => 'Partially Approved',
-                    'confirm'      => 'Pending Approval',
+                    'confirm'      => 'Pending',
                     'refuse'       => 'Rejected',
                     default        => ucfirst($stateValue),
                 };
@@ -212,19 +230,11 @@ class EmployeeDashboardOverviewWidget extends Widget
             })
             ->all();
 
-        // 4. Action URLs
         $requestLeaveUrl = null;
         try {
             $requestLeaveUrl = MyTimeOffResource::getUrl('create');
         } catch (\Throwable) {
             $requestLeaveUrl = url('/admin/time-off/dashboard/my-time-offs/create');
-        }
-
-        $myAttendanceUrl = null;
-        try {
-            $myAttendanceUrl = MyAttendance::getUrl();
-        } catch (\Throwable) {
-            $myAttendanceUrl = url('/admin/my-attendance');
         }
 
         $profileUrl = null;
@@ -236,18 +246,10 @@ class EmployeeDashboardOverviewWidget extends Widget
 
         return [
             'employee'     => $employeeData,
-            'leaveSummary' => [
-                'total_allocated'    => $totalAllocated,
-                'total_taken'        => $totalTaken,
-                'total_left'         => $totalLeft,
-                'total_pending'      => $totalPending,
-                'overall_percentage' => $overallPercentage,
-                'cards'              => $leaveCards,
-            ],
+            'leaveSummary' => $leaveData,
             'recentLeaves' => $recentLeaves,
             'urls'         => [
                 'request_leave' => $requestLeaveUrl,
-                'my_attendance' => $myAttendanceUrl,
                 'profile'       => $profileUrl,
             ],
         ];

@@ -2,6 +2,7 @@
 
 namespace Webkul\Support\Filament\Pages;
 
+use App\Filament\Widgets\EmployeeDashboardOverviewWidget;
 use Carbon\Carbon;
 use Exception;
 use Filament\Actions\Action;
@@ -28,10 +29,6 @@ use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
 use Webkul\Employee\Models\Employee;
 use Webkul\Support\Filament\Clusters\Settings;
-use Webkul\TimeOff\Enums\State;
-use Webkul\TimeOff\Models\Leave;
-use Webkul\TimeOff\Models\LeaveAllocation;
-use Webkul\TimeOff\Models\LeaveType;
 
 class Profile extends Page implements HasForms
 {
@@ -289,7 +286,7 @@ class Profile extends Page implements HasForms
 
             $previousLanguage = $user->language ?? app()->getLocale();
 
-            if (array_key_exists('avatar', $data)) {
+            if (array_key_exists('avatar', $data) && $user->partner) {
                 if (
                     $user->avatar
                     && $data['avatar'] !== $user->avatar
@@ -458,7 +455,7 @@ class Profile extends Page implements HasForms
 
         $userData = $user->only(['name', 'email', 'avatar', 'language']);
 
-        $userData['avatar'] = $user->partner->avatar;
+        $userData['avatar'] = $user->partner?->avatar ?? $user->avatar;
 
         if (empty($userData['language'])) {
             $userData['language'] = app()->getLocale();
@@ -631,52 +628,7 @@ class Profile extends Page implements HasForms
             $companyId = (int) ($employee->company_id ?? $user->default_company_id ?? 1);
             $endOfYear = Carbon::now()->endOfYear();
 
-            $leaveTypes = LeaveType::query()
-                ->where('is_active', true)
-                ->where(function ($q) use ($companyId): void {
-                    $q->whereNull('company_id')
-                        ->orWhere('company_id', $companyId);
-                })
-                ->orderBy('name')
-                ->get();
-
-            $cards = [];
-            $totalAllocated = 0.0;
-            $totalTaken = 0.0;
-
-            foreach ($leaveTypes as $type) {
-                $allocated = (float) LeaveAllocation::where('employee_id', $employee->id)
-                    ->where('holiday_status_id', $type->id)
-                    ->where('state', State::VALIDATE_TWO->value)
-                    ->where(function ($q) use ($endOfYear) {
-                        $q->where('date_to', '<=', $endOfYear)
-                            ->orWhereNull('date_to');
-                    })
-                    ->sum('number_of_days');
-
-                $taken = (float) Leave::where('employee_id', $employee->id)
-                    ->where('holiday_status_id', $type->id)
-                    ->where('state', State::VALIDATE_TWO->value)
-                    ->sum('number_of_days');
-
-                $left = max(0, round($allocated - $taken, 1));
-                $totalAllocated += $allocated;
-                $totalTaken += $taken;
-
-                $cards[] = [
-                    'name'      => $type->name,
-                    'allocated' => $allocated,
-                    'taken'     => $taken,
-                    'left'      => $left,
-                ];
-            }
-
-            $leaveSummary = [
-                'total_allocated' => $totalAllocated,
-                'total_taken'     => $totalTaken,
-                'total_left'      => max(0, round($totalAllocated - $totalTaken, 1)),
-                'cards'           => $cards,
-            ];
+            $leaveSummary = EmployeeDashboardOverviewWidget::calculateCanonicalLeaves($employee, $companyId, $endOfYear);
         }
 
         return [

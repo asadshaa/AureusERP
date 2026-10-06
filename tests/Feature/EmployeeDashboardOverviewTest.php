@@ -128,13 +128,15 @@ class EmployeeDashboardOverviewTest extends TestCase
     public function test_profile_page_updates_reflect_on_erp_employee(): void
     {
         $company = Company::factory()->create(['is_active' => true]);
-        $user = User::factory()->create(['default_company_id' => $company->id, 'name' => 'Original Name', 'email' => 'original@erp.com']);
+        $uniqueEmail = 'orig_'.uniqid().'@erp.com';
+        $updatedEmail = 'upd_'.uniqid().'@erp.com';
+        $user = User::factory()->create(['default_company_id' => $company->id, 'name' => 'Original Name', 'email' => $uniqueEmail]);
 
         $employee = Employee::query()->create([
             'company_id'      => $company->id,
             'user_id'         => $user->id,
             'name'            => 'Original Name',
-            'work_email'      => 'original@erp.com',
+            'work_email'      => $uniqueEmail,
             'mobile_phone'    => '111-222',
             'emergency_phone' => '333-444',
         ]);
@@ -144,15 +146,54 @@ class EmployeeDashboardOverviewTest extends TestCase
         Livewire::test(Profile::class)
             ->fillForm([
                 'name'             => 'Updated Employee Name',
-                'email'            => 'updated@erp.com',
+                'email'            => $updatedEmail,
                 'mobile_phone'     => '999-888-777',
                 'emergency_phone'  => '555-444-333',
             ], 'editProfileForm')
             ->call('updateProfile');
 
         $this->assertEquals('Updated Employee Name', $employee->fresh()->name);
-        $this->assertEquals('updated@erp.com', $employee->fresh()->work_email);
+        $this->assertEquals($updatedEmail, $employee->fresh()->work_email);
         $this->assertEquals('999-888-777', $employee->fresh()->mobile_phone);
         $this->assertEquals('555-444-333', $employee->fresh()->emergency_phone);
+    }
+
+    public function test_employee_dashboard_widget_defaults_to_canonical_25_leaves_allocation(): void
+    {
+        $company = Company::factory()->create(['is_active' => true]);
+        $user = User::factory()->create(['default_company_id' => $company->id, 'name' => 'Sara Connor']);
+        $employee = Employee::query()->create([
+            'company_id' => $company->id,
+            'user_id'    => $user->id,
+            'name'       => 'Sara Connor',
+        ]);
+
+        $annualType = LeaveType::query()->create([
+            'company_id' => $company->id,
+            'name'       => 'Annual Leave',
+            'is_active'  => true,
+        ]);
+
+        Leave::query()->create([
+            'company_id'          => $company->id,
+            'employee_company_id' => $company->id,
+            'employee_id'         => $employee->id,
+            'user_id'             => $user->id,
+            'holiday_status_id'   => $annualType->id,
+            'number_of_days'      => 2,
+            'state'               => State::VALIDATE_TWO->value,
+        ]);
+
+        $this->actingAs($user);
+
+        Livewire::test(EmployeeDashboardOverviewWidget::class)
+            ->assertSee('Total Balance')
+            ->assertSee('23.0') // 25 total - 2 used = 23 left
+            ->assertSee('Annual Leave')
+            ->assertSee('10.0') // 12 allocated - 2 used = 10 left
+            ->assertSee('Casual Leave')
+            ->assertSee('8.0')  // 8 allocated - 0 used = 8 left
+            ->assertSee('Sick Leave')
+            ->assertSee('5.0');  // 5 allocated - 0 used = 5 left
     }
 }
