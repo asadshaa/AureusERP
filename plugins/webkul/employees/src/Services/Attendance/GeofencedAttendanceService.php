@@ -547,7 +547,7 @@ class GeofencedAttendanceService
                 $record->save();
             });
 
-            return AttendanceVerification::query()->create([
+            $verification = AttendanceVerification::query()->create([
                 'company_id'           => $record->company_id,
                 'employee_id'          => $record->employee_id,
                 'user_id'              => $actor->id,
@@ -567,6 +567,37 @@ class GeofencedAttendanceService
                 ],
                 'server_recorded_at'   => now(),
             ]);
+
+            try {
+                if ($employee->user && $employee->user->is_active && (int) $employee->user->id !== (int) $actor->id) {
+                    $dateStr = $record->attendance_date?->format('d M Y') ?? 'attendance';
+                    $inTime = ! empty($after['check_in']) ? Carbon::parse($after['check_in'])->format('H:i') : null;
+                    $outTime = ! empty($after['check_out']) ? Carbon::parse($after['check_out'])->format('H:i') : null;
+                    $times = [];
+                    if ($inTime) {
+                        $times[] = "Check-in: {$inTime}";
+                    }
+                    if ($outTime) {
+                        $times[] = "Check-out: {$outTime}";
+                    }
+                    $timeStr = ! empty($times) ? ' ('.implode(', ', $times).')' : '';
+
+                    $title = 'HR updated your attendance time';
+                    $body = "HR ({$actor->name}) updated your attendance time for {$dateStr}{$timeStr}. Reason: {$reason}";
+
+                    $notification = FilamentNotification::make()
+                        ->info()
+                        ->icon('heroicon-o-clock')
+                        ->title($title)
+                        ->body($body);
+
+                    $employee->user->notifyNow($notification->toDatabase());
+                }
+            } catch (Throwable $e) {
+                report($e);
+            }
+
+            return $verification;
         });
     }
 

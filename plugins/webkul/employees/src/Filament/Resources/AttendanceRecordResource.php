@@ -153,7 +153,48 @@ class AttendanceRecordResource extends Resource
         $reason = (string) Arr::pull($data, 'correction_reason', '');
 
         if (! self::isEvidenceBacked($record)) {
+            $times = Arr::only($data, ['check_in', 'check_out']);
+            $hasTimeChange = false;
+            foreach ($times as $key => $value) {
+                $current = $record->{$key}?->format('Y-m-d H:i:s');
+                if (($value !== null ? Carbon::parse($value)->format('Y-m-d H:i:s') : null) !== $current) {
+                    $hasTimeChange = true;
+                    break;
+                }
+            }
+
             $record->update($data);
+
+            if ($hasTimeChange && Auth::check()) {
+                $record->loadMissing('employee.user');
+                if ($record->employee?->user && (int) $record->employee->user_id !== (int) Auth::id()) {
+                    try {
+                        $actor = Auth::user();
+                        $dateStr = $record->attendance_date ? Carbon::parse($record->attendance_date)->format('d M Y') : 'your record';
+                        $timesList = [];
+                        if ($record->check_in) {
+                            $timesList[] = 'Check-in: '.$record->check_in->format('H:i');
+                        }
+                        if ($record->check_out) {
+                            $timesList[] = 'Check-out: '.$record->check_out->format('H:i');
+                        }
+                        $timeStr = ! empty($timesList) ? ' ('.implode(', ', $timesList).')' : '';
+
+                        $title = 'HR updated your attendance time';
+                        $body = "HR ({$actor->name}) updated your attendance time for {$dateStr}{$timeStr}.".($reason ? " Reason: {$reason}" : '');
+
+                        $notification = Notification::make()
+                            ->info()
+                            ->icon('heroicon-o-clock')
+                            ->title($title)
+                            ->body($body);
+
+                        $record->employee->user->notifyNow($notification->toDatabase());
+                    } catch (\Throwable $e) {
+                        report($e);
+                    }
+                }
+            }
 
             return $record;
         }
@@ -318,7 +359,38 @@ class AttendanceRecordResource extends Resource
                     'Attendance deleted. The evidence and your reason were kept in the audit trail.',
                 )),
         ])
-            ->headerActions([CreateAction::make()])
+            ->headerActions([
+                CreateAction::make()
+                    ->after(function (AttendanceRecord $record): void {
+                        if (Auth::check()) {
+                            $record->loadMissing('employee.user');
+                            if ($record->employee?->user && (int) $record->employee->user_id !== (int) Auth::id()) {
+                                try {
+                                    $actor = Auth::user();
+                                    $dateStr = $record->attendance_date ? Carbon::parse($record->attendance_date)->format('d M Y') : 'your record';
+                                    $timesList = [];
+                                    if ($record->check_in) {
+                                        $timesList[] = 'Check-in: '.$record->check_in->format('H:i');
+                                    }
+                                    if ($record->check_out) {
+                                        $timesList[] = 'Check-out: '.$record->check_out->format('H:i');
+                                    }
+                                    $timeStr = ! empty($timesList) ? ' ('.implode(', ', $timesList).')' : '';
+
+                                    $notification = Notification::make()
+                                        ->info()
+                                        ->icon('heroicon-o-clock')
+                                        ->title('HR added your attendance record')
+                                        ->body("HR ({$actor->name}) added an attendance record for {$dateStr}{$timeStr}.");
+
+                                    $record->employee->user->notifyNow($notification->toDatabase());
+                                } catch (\Throwable $e) {
+                                    report($e);
+                                }
+                            }
+                        }
+                    }),
+            ])
             ->bulkActions([
                 BulkActionGroup::make([
                     BulkAction::make('bulk_approve_verifications')

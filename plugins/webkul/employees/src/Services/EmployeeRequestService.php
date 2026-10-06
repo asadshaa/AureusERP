@@ -690,7 +690,7 @@ class EmployeeRequestService
     private function notifyDecision(EmployeeRequest $request, string $decision, ?string $reason = null): void
     {
         try {
-            $request->loadMissing(['employee.user', 'requester', 'requestType']);
+            $request->loadMissing(['employee.user', 'employee.parent', 'requester', 'requestType', 'approvalRequest.decisions.actor.employee']);
             $recipients = collect([$request->requester, $request->employee?->user])
                 ->filter(fn (?User $u): bool => $u && $u->is_active)
                 ->unique('id');
@@ -702,13 +702,57 @@ class EmployeeRequestService
             $what = $request->requestType?->name ?? 'Employee Request';
             $isApproved = $decision === 'approved';
 
-            $title = $isApproved
-                ? "{$what} Approved"
-                : "{$what} Rejected";
+            // Resolve who approved/rejected the request
+            $approval = $request->approvalRequest;
+            $lastDecision = $approval?->decisions?->last();
+            $actor = $lastDecision?->actor;
+            $actorEmployee = $actor?->employee ?? ($lastDecision?->actor_id ? Employee::where('user_id', $lastDecision->actor_id)->first() : null);
 
-            $body = $isApproved
-                ? "Your {$what} ('{$request->title}') has been approved."
-                : "Your {$what} ('{$request->title}') was rejected.".($reason ? " Reason: {$reason}" : '');
+            $isLineManager = $request->employee && $actorEmployee && (int) $request->employee->parent_id === (int) $actorEmployee->id;
+            if ($isLineManager) {
+                $approverRole = 'Line Manager';
+            } elseif ($actor && ($actor->hasRole(['Admin', 'Super Admin', 'hr', 'hr_manager', 'hr manager', 'hr_ops_manager', 'hr ops manager', 'hr_administrator', 'human resources', 'human resources manager']) || $actor->can('hr_manage_attendance') || $actor->can('hr_view_all_records'))) {
+                $approverRole = 'HR';
+            } else {
+                $approverRole = 'Line Manager';
+            }
+
+            $actorName = $actor?->name;
+            $approverLabel = $actorName ? "{$approverRole} ({$actorName})" : $approverRole;
+
+            $payload = (array) $request->payload;
+            $kind = $payload['kind'] ?? '';
+            $isTimeChange = $kind === 'attendance_time_change' || ($request->requestType?->category === 'attendance_correction') || str_contains(strtolower($what), 'time change');
+            $isMissedDay = $kind === 'attendance_missing_day';
+            $dateStr = $payload['formatted_date'] ?? $payload['attendance_date'] ?? '';
+
+            if ($isTimeChange) {
+                $dateInfo = $dateStr ? " for {$dateStr}" : '';
+                $title = $isApproved
+                    ? "{$approverRole} approved your time change request"
+                    : "{$approverRole} rejected your time change request";
+
+                $body = $isApproved
+                    ? "Your attendance time change request{$dateInfo} has been approved by {$approverLabel}."
+                    : "Your attendance time change request{$dateInfo} was rejected by {$approverLabel}.".($reason ? " Reason: {$reason}" : '');
+            } elseif ($isMissedDay) {
+                $dateInfo = $dateStr ? " for {$dateStr}" : '';
+                $title = $isApproved
+                    ? "{$approverRole} approved your missed attendance request"
+                    : "{$approverRole} rejected your missed attendance request";
+
+                $body = $isApproved
+                    ? "Your missed attendance request{$dateInfo} has been approved by {$approverLabel}."
+                    : "Your missed attendance request{$dateInfo} was rejected by {$approverLabel}.".($reason ? " Reason: {$reason}" : '');
+            } else {
+                $title = $isApproved
+                    ? "{$approverRole} approved your {$what} request"
+                    : "{$approverRole} rejected your {$what} request";
+
+                $body = $isApproved
+                    ? "Your {$what} ('{$request->title}') has been approved by {$approverLabel}."
+                    : "Your {$what} ('{$request->title}') was rejected by {$approverLabel}.".($reason ? " Reason: {$reason}" : '');
+            }
 
             $notification = FilamentNotification::make()
                 ->color($isApproved ? 'success' : 'danger')

@@ -119,6 +119,8 @@ class LeaveApprovalService
                 'state'             => State::VALIDATE_ONE,
                 'first_approver_id' => $firstApprover?->id,
             ]);
+
+            $this->notifyDecision($leave, 'partially_approved');
         }
 
         return $leave->fresh(['approvalRequest.decisions']);
@@ -189,7 +191,7 @@ class LeaveApprovalService
     private function notifyDecision(Leave $leave, string $decision, ?string $reason = null): void
     {
         try {
-            $leave->loadMissing(['employee.user', 'user', 'holidayStatus']);
+            $leave->loadMissing(['employee.user', 'employee.parent', 'user', 'holidayStatus', 'approvalRequest.decisions.actor.employee']);
             $recipients = collect([$leave->user, $leave->employee?->user])
                 ->filter(fn (?User $u): bool => $u && $u->is_active)
                 ->unique('id');
@@ -201,17 +203,58 @@ class LeaveApprovalService
             $type = $leave->holidayStatus?->name ?? 'Leave';
             $isApproved = $decision === 'approved';
 
-            $title = $isApproved
-                ? "{$type} Request Approved"
-                : "{$type} Request Rejected";
+            // Resolve who approved/rejected the leave request
+            $approval = $leave->approvalRequest;
+            $lastDecision = $approval?->decisions?->last();
+            $actor = $lastDecision?->actor;
+            $actorEmployee = $actor?->employee ?? ($lastDecision?->actor_id ? Employee::where('user_id', $lastDecision->actor_id)->first() : null);
 
-            $dateInfo = $leave->date_from ? " ({$leave->date_from->toDateString()})" : '';
-            $body = $isApproved
-                ? "Your {$type} request{$dateInfo} has been approved."
-                : "Your {$type} request{$dateInfo} was rejected.".($reason ? " Reason: {$reason}" : '');
+            $isLineManager = $leave->employee && $actorEmployee && (int) $leave->employee->parent_id === (int) $actorEmployee->id;
+            if ($isLineManager) {
+                $approverRole = 'Line Manager';
+            } elseif ($actor && ($actor->hasRole(['Admin', 'Super Admin', 'hr', 'hr_manager', 'hr manager', 'hr_ops_manager', 'hr ops manager', 'hr_administrator', 'human resources', 'human resources manager']) || $actor->can('hr_approve_leave') || $actor->can('hr_manage_attendance'))) {
+                $approverRole = 'HR';
+            } else {
+                $approverRole = 'Line Manager';
+            }
+
+            $actorName = $actor?->name;
+            $approverLabel = $actorName ? "{$approverRole} ({$actorName})" : $approverRole;
+
+            $dateInfo = '';
+            if ($leave->request_date_from) {
+                $startDate = Carbon::parse($leave->request_date_from)->format('d M Y');
+                $endDate = $leave->request_date_to ? Carbon::parse($leave->request_date_to)->format('d M Y') : $startDate;
+                $days = $leave->number_of_days ? ' ('.(float) $leave->number_of_days.' days)' : '';
+                $dateInfo = " from {$startDate}".($endDate !== $startDate ? " to {$endDate}" : '').$days;
+            } elseif ($leave->date_from) {
+                $dateInfo = " ({$leave->date_from->toDateString()})";
+            }
+
+            $isApproved = $decision === 'approved';
+            $isRejected = $decision === 'rejected';
+            $isPartiallyApproved = $decision === 'partially_approved';
+
+            if ($isPartiallyApproved) {
+                $title = "{$approverRole} approved your leave request";
+                $body = "Your {$type} request{$dateInfo} has been approved by {$approverLabel} and forwarded for final review.";
+                $color = 'info';
+                $icon = 'heroicon-o-check-circle';
+            } elseif ($isApproved) {
+                $title = "{$approverRole} approved your leave request";
+                $body = "Your {$type} request{$dateInfo} has been approved by {$approverLabel}.";
+                $color = 'success';
+                $icon = 'heroicon-o-check-circle';
+            } else {
+                $title = "{$approverRole} rejected your leave request";
+                $body = "Your {$type} request{$dateInfo} was rejected by {$approverLabel}.".($reason ? " Reason: {$reason}" : '');
+                $color = 'danger';
+                $icon = 'heroicon-o-x-circle';
+            }
 
             $notification = FilamentNotification::make()
-                ->color($isApproved ? 'success' : 'danger')
+                ->color($color)
+                ->icon($icon)
                 ->title($title)
                 ->body($body);
 

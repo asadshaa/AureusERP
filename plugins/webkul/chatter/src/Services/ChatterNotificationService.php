@@ -123,9 +123,9 @@ class ChatterNotificationService
             return;
         }
 
-        [$title, $body, $icon, $color] = $this->resolveNotificationPayload($message, $record, $causerName, $recordName);
-
         foreach ($recipients as $user) {
+            [$title, $body, $icon, $color] = $this->resolveNotificationPayload($message, $record, $causerName, $recordName, $user);
+
             $user->notify(new ChatterDatabaseNotification($title, $body, $icon, $color, $recordUrl));
         }
     }
@@ -418,25 +418,44 @@ class ChatterNotificationService
         Message $message,
         Model $record,
         string $causerName,
-        string $recordName
+        string $recordName,
+        ?User $recipient = null
     ): array {
         [$titleKey, $icon, $color] = $this->resolveTypeMeta($message);
+
+        $isTargetEmployee = $recipient && (
+            (int) $recipient->id === (int) ($record->employee?->user_id ?? 0)
+            || (int) $recipient->id === (int) ($record->user_id ?? 0)
+        );
+
+        $actorRole = $this->resolveActorRole($record, $message->causer);
+        $actorLabel = "{$actorRole} ({$causerName})";
 
         if ($record instanceof Leave) {
             $employeeName = $record->employee?->name ?? $causerName;
             $days = $record->number_of_days ? ' ('.(float) $record->number_of_days.' days)' : '';
 
             if ($message->event === 'created') {
-                $title = "{$employeeName} requested time off: {$recordName}";
-                $body = "{$employeeName} requested {$recordName}{$days}.";
+                if ($isTargetEmployee && $causerName !== $employeeName) {
+                    $title = "{$actorRole} ({$causerName}) created a time off request for you: {$recordName}";
+                    $body = "A time off request ({$recordName}{$days}) was created for you by {$actorLabel}.";
+                } else {
+                    $title = "{$employeeName} requested time off: {$recordName}";
+                    $body = "{$employeeName} requested {$recordName}{$days}.";
+                }
                 $icon = 'heroicon-o-calendar-days';
                 $color = 'warning';
 
                 return [$title, $body, $icon, $color];
             }
 
-            $title = "{$employeeName} updated time off: {$recordName}";
-            $body = $this->summarizeChanges($message) ?? "Time off request ({$recordName}) for {$employeeName} was updated.";
+            if ($isTargetEmployee && $causerName !== $employeeName) {
+                $title = "{$actorRole} ({$causerName}) updated your time off: {$recordName}";
+                $body = $this->summarizeChanges($message) ?? "Your time off request ({$recordName}) was updated by {$actorLabel}.";
+            } else {
+                $title = "{$employeeName} updated time off: {$recordName}";
+                $body = $this->summarizeChanges($message) ?? "Time off request ({$recordName}) for {$employeeName} was updated.";
+            }
 
             return [$title, $body, $icon, $color];
         }
@@ -446,16 +465,26 @@ class ChatterNotificationService
             $days = $record->number_of_days ? ' ('.(float) $record->number_of_days.' days)' : '';
 
             if ($message->event === 'created') {
-                $title = "{$employeeName} requested time off: {$recordName}";
-                $body = "A new leave allocation ({$recordName}) was created for {$employeeName}{$days}.";
+                if ($isTargetEmployee && $causerName !== $employeeName) {
+                    $title = "{$actorRole} ({$causerName}) allocated {$recordName} for you";
+                    $body = "A new leave allocation ({$recordName}) was created for you by {$actorLabel}{$days}.";
+                } else {
+                    $title = "{$employeeName} requested time off: {$recordName}";
+                    $body = "A new leave allocation ({$recordName}) was created for {$employeeName}{$days}.";
+                }
                 $icon = 'heroicon-o-plus-circle';
                 $color = 'success';
 
                 return [$title, $body, $icon, $color];
             }
 
-            $title = "{$employeeName} updated leave allocation: {$recordName}";
-            $body = $this->summarizeChanges($message) ?? "Leave allocation ({$recordName}) for {$employeeName} was updated.";
+            if ($isTargetEmployee && $causerName !== $employeeName) {
+                $title = "{$actorRole} ({$causerName}) updated your leave allocation: {$recordName}";
+                $body = $this->summarizeChanges($message) ?? "Your leave allocation ({$recordName}) was updated by {$actorLabel}.";
+            } else {
+                $title = "{$employeeName} updated leave allocation: {$recordName}";
+                $body = $this->summarizeChanges($message) ?? "Leave allocation ({$recordName}) for {$employeeName} was updated.";
+            }
 
             return [$title, $body, $icon, $color];
         }
@@ -466,8 +495,13 @@ class ChatterNotificationService
 
             if ($kind === 'attendance_time_change') {
                 $dateStr = $record->payload['formatted_date'] ?? $record->payload['attendance_date'] ?? '';
-                $title = "{$employeeName} requested attendance time change";
-                $body = "Attendance time change requested for {$employeeName}".($dateStr ? " ({$dateStr})" : '').'.';
+                if ($isTargetEmployee && $causerName !== $employeeName) {
+                    $title = "{$actorRole} ({$causerName}) updated your attendance time change";
+                    $body = 'Your attendance time change request'.($dateStr ? " for {$dateStr}" : '')." was updated by {$actorLabel}.";
+                } else {
+                    $title = "{$employeeName} requested attendance time change";
+                    $body = "Attendance time change requested for {$employeeName}".($dateStr ? " ({$dateStr})" : '').'.';
+                }
                 $icon = 'heroicon-o-clock';
                 $color = 'warning';
 
@@ -476,16 +510,26 @@ class ChatterNotificationService
 
             if ($kind === 'attendance_missing_day') {
                 $dateStr = $record->payload['formatted_date'] ?? $record->payload['attendance_date'] ?? '';
-                $title = "{$employeeName} requested missed attendance";
-                $body = "Missed attendance day requested for {$employeeName}".($dateStr ? " ({$dateStr})" : '').'.';
+                if ($isTargetEmployee && $causerName !== $employeeName) {
+                    $title = "{$actorRole} ({$causerName}) updated your missed attendance";
+                    $body = 'Your missed attendance request'.($dateStr ? " for {$dateStr}" : '')." was updated by {$actorLabel}.";
+                } else {
+                    $title = "{$employeeName} requested missed attendance";
+                    $body = "Missed attendance day requested for {$employeeName}".($dateStr ? " ({$dateStr})" : '').'.';
+                }
                 $icon = 'heroicon-o-clock';
                 $color = 'warning';
 
                 return [$title, $body, $icon, $color];
             }
 
-            $title = "{$employeeName} requested {$recordName}";
-            $body = $record->description ?: "Request submitted by {$employeeName}.";
+            if ($isTargetEmployee && $causerName !== $employeeName) {
+                $title = "{$actorRole} ({$causerName}) updated your {$recordName}";
+                $body = $record->description ?: "Your {$recordName} request was updated by {$actorLabel}.";
+            } else {
+                $title = "{$employeeName} requested {$recordName}";
+                $body = $record->description ?: "Request submitted by {$employeeName}.";
+            }
 
             return [$title, $body, $icon, $color];
         }
@@ -496,6 +540,34 @@ class ChatterNotificationService
             : $this->plainBody($message);
 
         return [$title, $body, $icon, $color];
+    }
+
+    protected function resolveActorRole(Model $record, ?User $causer): string
+    {
+        if (! $causer) {
+            return 'HR';
+        }
+
+        $employee = null;
+        if (method_exists($record, 'employee') && $record->relationLoaded('employee')) {
+            $employee = $record->employee;
+        } elseif ($record->getAttribute('employee_id')) {
+            $employee = Employee::find($record->getAttribute('employee_id'));
+        }
+
+        $causerEmployee = $causer->relationLoaded('employee') ? $causer->employee : Employee::where('user_id', $causer->id)->first();
+
+        if ($employee && $causerEmployee && (int) $employee->parent_id === (int) $causerEmployee->id) {
+            return 'Line Manager';
+        }
+
+        if ($causer->hasRole(['Admin', 'Super Admin', 'hr', 'hr_manager', 'hr manager', 'hr_ops_manager', 'hr ops manager', 'hr_administrator', 'human resources', 'human resources manager'])
+            || $causer->can('hr_approve_leave')
+            || $causer->can('hr_manage_attendance')) {
+            return 'HR';
+        }
+
+        return 'Line Manager';
     }
 
     protected function resolveRecordName(mixed $record): string
