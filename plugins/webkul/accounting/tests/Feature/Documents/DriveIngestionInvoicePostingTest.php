@@ -231,6 +231,9 @@ it('creates a posted Move for an approved CustomerInvoice classification, with a
         ->and($move->move_type)->toBe(MoveType::OUT_INVOICE)
         ->and($move->company_id)->toBe($fx['company']->id)
         ->and($move->journal_id)->toBe($fx['saleJournal']->id)
+        ->and($move->accounting_source_type)->toBe('drive_ingestion')
+        ->and($move->accounting_source_id)->toBe($classification->id)
+        ->and($move->review_status)->toBe('posted')
         ->and((float) $move->amount_total)->toBe(750.5);
 
     $totalDebit = $move->lines->sum(fn ($l) => (float) $l->debit);

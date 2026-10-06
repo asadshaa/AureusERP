@@ -242,6 +242,9 @@ class DriveInvoicePostingService
         $move->state = MoveState::DRAFT;
         $move->invoice_date = $this->resolveInvoiceDate($classification, $currency);
         $move->reference = $classification->extracted_invoice_number;
+        $move->accounting_source_type = 'drive_ingestion';
+        $move->accounting_source_id = $classification->id;
+        $move->review_status = 'posted';
         $move->save();
 
         // Defensive company-isolation assertion -- not "should be true

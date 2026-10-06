@@ -44,6 +44,7 @@ use Filament\Tables\Filters\QueryBuilder\Constraints\DateConstraint;
 use Filament\Tables\Filters\QueryBuilder\Constraints\TextConstraint;
 use Filament\Tables\Table;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Auth;
 use Webkul\Account\Enums\JournalType;
@@ -296,6 +297,22 @@ class JournalEntryResource extends Resource
                 TextColumn::make('accounting_source_type')
                     ->label('Source')
                     ->badge()
+                    ->formatStateUsing(fn (?string $state): string => match ($state) {
+                        'drive_ingestion'          => 'Drive Ingestion',
+                        'bank_mapping'             => 'Bank Mapping',
+                        'manual_adjustment'        => 'Manual Adjustment',
+                        'fx_revaluation'           => 'FX Revaluation',
+                        'fx_revaluation_reversal'  => 'FX Reversal',
+                        'configured_journal_group' => 'Journal Import',
+                        default                    => $state ? str($state)->headline()->toString() : '-',
+                    })
+                    ->color(fn (?string $state): string => match ($state) {
+                        'drive_ingestion'                           => 'info',
+                        'bank_mapping'                              => 'success',
+                        'manual_adjustment'                         => 'warning',
+                        'fx_revaluation', 'fx_revaluation_reversal' => 'gray',
+                        default                                     => 'gray',
+                    })
                     ->placeholder('-')
                     ->sortable()
                     ->toggleable(),
@@ -306,12 +323,36 @@ class JournalEntryResource extends Resource
                     ->toggleable(isToggledHiddenByDefault: true),
                 TextColumn::make('cash_flow_category')
                     ->label('Cash Flow Category')
+                    ->badge()
+                    ->formatStateUsing(fn (?string $state): string => $state ? str($state)->headline()->toString() : '-')
+                    ->color(fn (?string $state): string => match ($state) {
+                        'operating' => 'info',
+                        'investing' => 'warning',
+                        'financing' => 'success',
+                        default     => 'gray',
+                    })
                     ->placeholder('-')
                     ->sortable()
                     ->toggleable(),
                 TextColumn::make('review_status')
                     ->label('Review Status')
                     ->badge()
+                    ->formatStateUsing(fn (?string $state): string => match ($state) {
+                        'approved'         => 'Approved',
+                        'posted'           => 'Posted',
+                        'draft'            => 'Draft',
+                        'needs_review'     => 'Needs Review',
+                        'suggested'        => 'Suggested',
+                        'unmapped'         => 'Unmapped',
+                        'matched_transfer' => 'Matched Transfer',
+                        default            => $state ? str($state)->headline()->toString() : '-',
+                    })
+                    ->color(fn (?string $state): string => match ($state) {
+                        'approved', 'posted' => 'success',
+                        'needs_review'       => 'warning',
+                        'suggested'          => 'info',
+                        default              => 'gray',
+                    })
                     ->placeholder('-')
                     ->sortable()
                     ->toggleable(),
@@ -423,7 +464,7 @@ class JournalEntryResource extends Resource
                         // Hidden() alone only hides the button; before() is the
                         // server-side check that actually blocks it.
                         ->hidden(fn (Model $record): bool => $record->state === MoveState::POSTED)
-                        ->before(function (Model $record, \Filament\Actions\DeleteAction $action): void {
+                        ->before(function (Model $record, DeleteAction $action): void {
                             if ($record->state === MoveState::POSTED) {
                                 Notification::make()->danger()->title('Posted journal entries cannot be deleted.')->body('Use Reverse to create a correcting entry instead.')->send();
                                 $action->halt();
@@ -440,7 +481,7 @@ class JournalEntryResource extends Resource
             ->toolbarActions([
                 BulkActionGroup::make([
                     DeleteBulkAction::make()
-                        ->before(function (\Illuminate\Database\Eloquent\Collection $records, \Filament\Actions\DeleteBulkAction $action): void {
+                        ->before(function (Collection $records, DeleteBulkAction $action): void {
                             if ($records->contains(fn (Model $record): bool => $record->state === MoveState::POSTED)) {
                                 Notification::make()->danger()->title('Posted journal entries cannot be deleted.')->body('Deselect any posted entries, or use Reverse on them instead.')->send();
                                 $action->halt();
