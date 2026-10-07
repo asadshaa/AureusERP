@@ -16,18 +16,29 @@ class InvoiceSummary extends BaseInvoiceSummary
 {
     public function getResourceUrl($record): ?string
     {
-        $payment = Payment::find($record['account_payment_id']);
+        $moveType = $record['move_type'] instanceof MoveType
+            ? $record['move_type']
+            : (is_string($record['move_type'] ?? null) ? MoveType::tryFrom($record['move_type']) : null);
 
-        return match ($record['move_type']) {
-            MoveType::OUT_INVOICE => InvoiceResource::getUrl('view', ['record' => $record['move_id']]),
-            MoveType::IN_INVOICE  => BillResource::getUrl('view', ['record' => $record['move_id']]),
-            MoveType::OUT_REFUND  => CreditNoteResource::getUrl('view', ['record' => $record['move_id']]),
-            MoveType::IN_REFUND   => RefundResource::getUrl('view', ['record' => $record['move_id']]),
+        if (! $moveType) {
+            return null;
+        }
+
+        $payment = ! empty($record['account_payment_id'])
+            ? Payment::find($record['account_payment_id'])
+            : null;
+
+        return match ($moveType) {
+            MoveType::OUT_INVOICE => ! empty($record['move_id']) ? InvoiceResource::getUrl('view', ['record' => $record['move_id']]) : null,
+            MoveType::IN_INVOICE  => ! empty($record['move_id']) ? BillResource::getUrl('view', ['record' => $record['move_id']]) : null,
+            MoveType::OUT_REFUND  => ! empty($record['move_id']) ? CreditNoteResource::getUrl('view', ['record' => $record['move_id']]) : null,
+            MoveType::IN_REFUND   => ! empty($record['move_id']) ? RefundResource::getUrl('view', ['record' => $record['move_id']]) : null,
             MoveType::ENTRY       => match ($payment?->partner_type) {
                 'customer', 'company' => CustomerPaymentResource::getUrl('view', ['record' => $record['account_payment_id']]),
                 'supplier'            => VendorPaymentResource::getUrl('view', ['record' => $record['account_payment_id']]),
                 default               => null,
             },
+            default               => null,
         };
     }
 }

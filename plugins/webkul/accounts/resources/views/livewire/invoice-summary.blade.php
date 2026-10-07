@@ -105,6 +105,7 @@
                         <div class="flex items-center gap-2">
                             {{ ($this->unReconcileAction())(['partial_id' => $line['partial_id']]) }}
 
+                            <div class="flex-1">
                                 @if ($url = $this->getResourceUrl($line))
                                     <x-filament::link :href="$url">
                                         {{ $line['ref'] }}
