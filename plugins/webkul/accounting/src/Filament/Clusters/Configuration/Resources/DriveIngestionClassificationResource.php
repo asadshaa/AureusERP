@@ -26,6 +26,7 @@ use Webkul\Accounting\Filament\Clusters\Configuration;
 use Webkul\Accounting\Filament\Clusters\Configuration\Resources\DriveIngestionClassificationResource\Pages\ListDriveIngestionClassifications;
 use Webkul\Accounting\Filament\Clusters\Configuration\Resources\DriveIngestionClassificationResource\Pages\ViewDriveIngestionClassification;
 use Webkul\Accounting\Models\DriveIngestionClassification;
+use Webkul\Accounting\Services\Drive\DriveIngestionService;
 use Webkul\Accounting\Services\Drive\DriveInvoicePostingService;
 use Webkul\Accounting\Support\AccountingPermissions;
 
@@ -368,6 +369,25 @@ class DriveIngestionClassificationResource extends Resource
                         $record->update(['validation_status' => DriveClassificationStatus::Rejected]);
                         Notification::make()->warning()->title('Document Rejected')->send();
                     }),
+                Action::make('delete')
+                    ->label('Delete')
+                    ->icon('heroicon-o-trash')
+                    ->color('danger')
+                    ->authorize(AccountingPermissions::ManageDocuments)
+                    ->visible(fn (DriveIngestionClassification $record) => $record->created_invoice_id === null
+                        && $record->validation_status !== DriveClassificationStatus::Posted)
+                    ->requiresConfirmation()
+                    ->modalHeading('Delete Ingested Document')
+                    ->modalDescription('Are you sure you want to delete this unposted document? It will be permanently removed from Aureus ERP and moved to Google Drive trash.')
+                    ->action(function (DriveIngestionClassification $record) {
+                        try {
+                            $result = app(DriveIngestionService::class)->deleteIngestionClassification($record, deleteFromDrive: true);
+                            $driveMsg = $result['drive_deleted'] ? ' and moved to Google Drive trash' : '';
+                            Notification::make()->success()->title('Document Deleted')->body("Document successfully deleted{$driveMsg}.")->send();
+                        } catch (\Throwable $e) {
+                            Notification::make()->danger()->title('Delete Failed')->body($e->getMessage())->send();
+                        }
+                    }),
             ])
             ->bulkActions([
                 BulkAction::make('bulkReject')
@@ -387,6 +407,47 @@ class DriveIngestionClassificationResource extends Resource
                             }
                         }
                         Notification::make()->warning()->title("Rejected {$count} document(s)")->send();
+                    }),
+                BulkAction::make('bulkDelete')
+                    ->label('Delete Selected')
+                    ->icon('heroicon-o-trash')
+                    ->color('danger')
+                    ->authorize(AccountingPermissions::ManageDocuments)
+                    ->requiresConfirmation()
+                    ->modalHeading('Delete Selected Ingested Documents')
+                    ->modalDescription('Are you sure you want to delete the selected unposted documents? They will be permanently removed from Aureus ERP and moved to Google Drive trash. Any already-posted documents will be preserved.')
+                    ->action(function (Collection $records) {
+                        $deletedCount = 0;
+                        $skippedCount = 0;
+                        $service = app(DriveIngestionService::class);
+
+                        foreach ($records as $record) {
+                            if ($record->created_invoice_id !== null || $record->validation_status === DriveClassificationStatus::Posted) {
+                                $skippedCount++;
+
+                                continue;
+                            }
+
+                            try {
+                                $service->deleteIngestionClassification($record, deleteFromDrive: true);
+                                $deletedCount++;
+                            } catch (\Throwable $e) {
+                                $skippedCount++;
+                            }
+                        }
+
+                        if ($deletedCount > 0) {
+                            $msg = "Removed {$deletedCount} document(s) from Aureus and moved to Google Drive trash.";
+                            if ($skippedCount > 0) {
+                                $msg .= " ({$skippedCount} already-posted document(s) were protected and skipped).";
+                            }
+                            Notification::make()->success()->title("Deleted {$deletedCount} Document(s)")->body($msg)->send();
+                        } elseif ($skippedCount > 0) {
+                            Notification::make()->warning()
+                                ->title('No Documents Deleted')
+                                ->body("All {$skippedCount} selected document(s) are already posted to the General Ledger and cannot be deleted.")
+                                ->send();
+                        }
                     }),
             ]);
     }

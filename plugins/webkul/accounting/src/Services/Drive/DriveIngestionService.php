@@ -6,6 +6,7 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use RuntimeException;
 use Throwable;
 use Webkul\Accounting\Contracts\DriveClient;
@@ -14,6 +15,7 @@ use Webkul\Accounting\Enums\DocumentType;
 use Webkul\Accounting\Enums\DriveClassificationStatus;
 use Webkul\Accounting\Enums\DriveIngestionStatus;
 use Webkul\Accounting\Jobs\ClassifyDriveIngestionJob;
+use Webkul\Accounting\Models\DocumentAttachment;
 use Webkul\Accounting\Models\DocumentDriveSync;
 use Webkul\Accounting\Models\DriveIngestion;
 use Webkul\Accounting\Models\DriveIngestionClassification;
@@ -501,5 +503,76 @@ class DriveIngestionService
         } catch (Throwable) {
             return null;
         }
+    }
+
+    /**
+     * Delete an unposted Drive ingestion classification, its local ingestion/document records,
+     * and trash the file in Google Drive.
+     *
+     * In accounting integrity rules, already-posted records (which have created a formal Move
+     * on the General Ledger) MUST NOT be deleted.
+     *
+     * @return array{success: bool, drive_deleted: bool}
+     */
+    public function deleteIngestionClassification(DriveIngestionClassification $classification, bool $deleteFromDrive = true): array
+    {
+        if ($classification->created_invoice_id !== null || $classification->validation_status === DriveClassificationStatus::Posted) {
+            throw new \DomainException("Cannot delete: Document #{$classification->id} has already been posted to the General Ledger as Move #{$classification->created_invoice_id}. Posted records cannot be deleted; use Reverse / Credit Note instead.");
+        }
+
+        $ingestion = $classification->driveIngestion;
+        $driveDeleted = false;
+
+        // 1. Trash the file from Google Drive if configured and file ID exists
+        if ($deleteFromDrive && $ingestion && $ingestion->drive_file_id) {
+            try {
+                $this->drive->trashFile($ingestion->drive_file_id);
+                $driveDeleted = true;
+            } catch (Throwable $e) {
+                Log::warning("Could not trash Drive file {$ingestion->drive_file_id}: {$e->getMessage()}");
+            }
+        }
+
+        // 2. Clean up linked Document and storage files if present and not attached to any Move
+        if ($ingestion && $ingestion->document_id) {
+            $document = $ingestion->document;
+            if ($document) {
+                $hasAttachments = DocumentAttachment::query()
+                    ->where('document_id', $document->id)
+                    ->exists();
+
+                if (! $hasAttachments) {
+                    foreach ($document->versions as $version) {
+                        if ($version->storage_path) {
+                            $disk = Storage::disk($version->storage_disk ?: 'accounting_documents');
+                            if ($disk->exists($version->storage_path)) {
+                                $disk->delete($version->storage_path);
+                            }
+                        }
+                        $version->delete();
+                    }
+                    $document->audits()->delete();
+                    $document->delete();
+                }
+            }
+        }
+
+        // 3. Clean up linked ApprovalRequest if pending
+        if ($classification->approval_request_id && $classification->approvalRequest) {
+            $approval = $classification->approvalRequest;
+            $approval->decisions()->delete();
+            $approval->delete();
+        }
+
+        // 4. Delete the classification and ingestion records
+        $classification->delete();
+        if ($ingestion) {
+            $ingestion->delete();
+        }
+
+        return [
+            'success'       => true,
+            'drive_deleted' => $driveDeleted,
+        ];
     }
 }

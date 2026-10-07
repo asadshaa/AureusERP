@@ -17,6 +17,7 @@ use Webkul\Accounting\Enums\DriveDocumentType;
 use Webkul\Accounting\Filament\Clusters\Configuration\Resources\DriveIngestionClassificationResource;
 use Webkul\Accounting\Models\FsTag;
 use Webkul\Accounting\Services\Drive\DriveClassificationService;
+use Webkul\Accounting\Services\Drive\DriveIngestionService;
 use Webkul\Accounting\Services\Drive\DriveInvoicePostingService;
 use Webkul\Accounting\Support\AccountingPermissions;
 use Webkul\Partner\Models\Partner;
@@ -380,6 +381,27 @@ class ViewDriveIngestionClassification extends ViewRecord
                     }
 
                     return $disk->download($version->storage_path, $this->record->driveIngestion->filename);
+                }),
+
+            Action::make('delete')
+                ->label('Delete Document')
+                ->icon('heroicon-o-trash')
+                ->color('danger')
+                ->authorize(AccountingPermissions::ManageDocuments)
+                ->visible(fn () => $this->record->created_invoice_id === null
+                    && $this->record->validation_status !== DriveClassificationStatus::Posted)
+                ->requiresConfirmation()
+                ->modalHeading('Delete Ingested Document')
+                ->modalDescription('Are you sure you want to delete this unposted document? It will be permanently removed from Aureus ERP and moved to Google Drive trash.')
+                ->action(function () {
+                    try {
+                        $result = app(DriveIngestionService::class)->deleteIngestionClassification($this->record, deleteFromDrive: true);
+                        $driveMsg = $result['drive_deleted'] ? ' and moved to Google Drive trash' : '';
+                        Notification::make()->success()->title('Document Deleted')->body("Document successfully deleted{$driveMsg}.")->send();
+                        $this->redirect(static::getResource()::getUrl('index'));
+                    } catch (\Throwable $e) {
+                        Notification::make()->danger()->title('Delete Failed')->body($e->getMessage())->send();
+                    }
                 }),
         ];
     }
