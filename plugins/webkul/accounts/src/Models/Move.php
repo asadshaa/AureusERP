@@ -1078,7 +1078,7 @@ class Move extends Model implements Sortable
                     part.id,
                     part.credit_move_id AS counterpart_line_id
                 FROM accounts_partial_reconciles part
-                JOIN account_move_line credit_line ON credit_line.id = part.credit_move_id
+                JOIN accounts_account_move_lines credit_line ON credit_line.id = part.credit_move_id
                 WHERE credit_line.move_id IN ('.$exchangeMoveIdsStr.') 
                     AND part.debit_move_id IN ('.$counterpartLineIdsStr.')
 
@@ -1088,7 +1088,7 @@ class Move extends Model implements Sortable
                     part.id,
                     part.debit_move_id AS counterpart_line_id
                 FROM accounts_partial_reconciles part
-                JOIN account_move_line debit_line ON debit_line.id = part.debit_move_id
+                JOIN accounts_account_move_lines debit_line ON debit_line.id = part.debit_move_id
                 WHERE debit_line.move_id IN ('.$exchangeMoveIdsStr.') 
                     AND part.credit_move_id IN ('.$counterpartLineIdsStr.')
             ';

@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\URL;
 use Webkul\Account\Enums\AccountType;
 use Webkul\Account\Enums\AmountType;
 use Webkul\Account\Enums\DisplayType;
@@ -10,9 +12,8 @@ use Webkul\Account\Enums\PaymentState;
 use Webkul\Account\Enums\RepartitionType;
 use Webkul\Account\Enums\TaxIncludeOverride;
 use Webkul\Account\Enums\TypeTaxUse;
+use Webkul\Account\Models\Move;
 use Webkul\Account\Models\TaxPartition;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\URL;
 use Webkul\PluginManager\Models\Plugin;
 use Webkul\PluginManager\Package;
 
@@ -216,7 +217,7 @@ it('records the foreign amount and company balance separately on a foreign-curre
     $currency = AccountHelper::otherCurrency();
 
     $invoice = AccountHelper::invoice(MoveType::OUT_INVOICE, $this->partner, null, [
-        'currency_id'          => $currency->id,
+        'currency_id'           => $currency->id,
         'invoice_currency_rate' => 2.0,
     ]);
     AccountHelper::productLine($invoice, $this->income, qty: 2, priceUnit: 100);
@@ -478,7 +479,7 @@ it('keeps the payment journal entry balanced when a shortfall is written off', f
 
     AccountHelper::pay($invoice, amount: 190, differenceHandling: 'reconcile');
 
-    $paymentMove = \Webkul\Account\Models\Move::query()
+    $paymentMove = Move::query()
         ->where('origin_payment_id', '!=', null)
         ->latest('id')
         ->first();
@@ -515,4 +516,45 @@ it('keeps section and note lines through post without affecting the balance', fu
         ->and((float) $invoice->amount_untaxed)->toBe(200.0)
         ->and((float) $lines->sum(fn ($l) => (float) $l->debit))->toBe(200.0)
         ->and((float) $lines->sum(fn ($l) => (float) $l->credit))->toBe(200.0);
+});
+
+it('retrieves reconciled payments with exchange move without crashing on missing table', function () {
+    $invoice = AccountHelper::invoice(MoveType::OUT_INVOICE, $this->partner);
+    AccountHelper::productLine($invoice, $this->income, qty: 1, priceUnit: 100);
+    AccountHelper::post($invoice);
+
+    $receivableLine = $invoice->refresh()->lines->first(fn ($l) => $l->account->account_type == AccountType::ASSET_RECEIVABLE);
+
+    $paymentMove = AccountHelper::journalEntry();
+    $bankAccount = AccountHelper::account('income');
+    $paymentDebit = AccountHelper::entryLine($paymentMove, $bankAccount, 100, 0);
+    $paymentCredit = AccountHelper::entryLine($paymentMove, $receivableLine->account, 0, 100);
+    AccountHelper::post($paymentMove);
+
+    $exchangeMove = AccountHelper::journalEntry();
+    $exchangeDebit = AccountHelper::entryLine($exchangeMove, $receivableLine->account, 5, 0);
+    $exchangeCredit = AccountHelper::entryLine($exchangeMove, $this->income, 0, 5);
+    AccountHelper::post($exchangeMove);
+
+    DB::table('accounts_partial_reconciles')->insert([
+        'debit_move_id'          => $receivableLine->id,
+        'credit_move_id'         => $paymentCredit->id,
+        'exchange_move_id'       => $exchangeMove->id,
+        'debit_currency_id'      => $invoice->currency_id,
+        'credit_currency_id'     => $invoice->currency_id,
+        'company_id'             => $invoice->company_id,
+        'creator_id'             => 1,
+        'max_date'               => now()->toDateString(),
+        'amount'                 => 100,
+        'debit_amount_currency'  => 100,
+        'credit_amount_currency' => 100,
+        'created_at'             => now(),
+        'updated_at'             => now(),
+    ]);
+
+    // This calls getAllReconciledInvoicePartials() internally which contains the joined SQL
+    $payments = $invoice->getReconciledPayments();
+
+    expect($payments)->toBeArray()
+        ->and(count($payments))->toBeGreaterThanOrEqual(1);
 });
