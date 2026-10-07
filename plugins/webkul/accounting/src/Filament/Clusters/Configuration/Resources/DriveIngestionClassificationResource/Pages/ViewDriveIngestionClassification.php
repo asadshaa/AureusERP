@@ -15,8 +15,6 @@ use Webkul\Account\Models\Account;
 use Webkul\Accounting\Enums\DriveClassificationStatus;
 use Webkul\Accounting\Enums\DriveDocumentType;
 use Webkul\Accounting\Filament\Clusters\Configuration\Resources\DriveIngestionClassificationResource;
-use Webkul\Accounting\Filament\Clusters\Customers\Resources\InvoiceResource;
-use Webkul\Accounting\Filament\Clusters\Vendors\Resources\BillResource;
 use Webkul\Accounting\Models\FsTag;
 use Webkul\Accounting\Services\Drive\DriveClassificationService;
 use Webkul\Accounting\Services\Drive\DriveInvoicePostingService;
@@ -383,16 +381,6 @@ class ViewDriveIngestionClassification extends ViewRecord
 
                     return $disk->download($version->storage_path, $this->record->driveIngestion->filename);
                 }),
-
-            Action::make('viewInvoice')
-                ->label('View Created Invoice')
-                ->icon('heroicon-o-arrow-top-right-on-square')
-                ->color('success')
-                ->visible(fn () => filled($this->record->created_invoice_id))
-                ->url(fn () => $this->record->createdInvoice?->isSale()
-                    ? InvoiceResource::getUrl('view', ['record' => $this->record->created_invoice_id])
-                    : BillResource::getUrl('view', ['record' => $this->record->created_invoice_id])
-                ),
         ];
     }
 }
