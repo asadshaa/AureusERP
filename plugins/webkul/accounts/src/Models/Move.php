@@ -983,38 +983,48 @@ class Move extends Model implements Sortable
         foreach ($reconciledPartials as $reconciledPartial) {
             $counterpartLine = $reconciledPartial['line'];
 
-            if ($counterpartLine->move->ref) {
-                $reconciliationRef = sprintf('%s (%s)', $counterpartLine->move->name, $counterpartLine->move->ref);
-            } else {
-                $reconciliationRef = $counterpartLine->move->name;
+            if (! $counterpartLine) {
+                continue;
             }
 
-            if ($counterpartLine->amount_currency && $counterpartLine->currency_id != $counterpartLine->company->currency_id) {
+            if ($counterpartLine->move?->ref) {
+                $reconciliationRef = sprintf('%s (%s)', $counterpartLine->move->name, $counterpartLine->move->ref);
+            } else {
+                $reconciliationRef = $counterpartLine->move?->name ?? '';
+            }
+
+            $lineCurrencyName = $counterpartLine->currency?->name ?? $this->currency?->name ?? 'PKR';
+            $companyCurrencyName = $counterpartLine->company?->currency?->name ?? $this->company?->currency?->name ?? 'PKR';
+
+            if ($counterpartLine->amount_currency && $counterpartLine->currency_id != $counterpartLine->company?->currency_id) {
                 $foreignCurrency = $counterpartLine->currency;
             } else {
                 $foreignCurrency = false;
             }
 
+            $partialCurrency = $reconciledPartial['currency'] ?? null;
+            $partialCurrencyId = $reconciledPartial['is_exchange']
+                ? ($this->company?->currency_id ?? $this->currency_id)
+                : ($partialCurrency instanceof Currency ? $partialCurrency->id : ($partialCurrency ?? $this->currency_id));
+
             $paymentVals['lines'][] = [
                 'name'         => $counterpartLine->name,
-                'journal_name' => $counterpartLine->journal->name,
-                'company_name' => $counterpartLine->journal->company_id != $this->company_id
-                    ? $counterpartLine->journal->company->name
+                'journal_name' => $counterpartLine->journal?->name ?? '—',
+                'company_name' => ($counterpartLine->journal?->company_id && $counterpartLine->journal->company_id != $this->company_id)
+                    ? $counterpartLine->journal->company?->name
                     : false,
-                'amount'                  => $reconciledPartial['amount'],
-                'amount_currency'         => money($reconciledPartial['amount'], $counterpartLine->currency->name),
-                'currency_id'             => $reconciledPartial['is_exchange']
-                    ? $this->company->currency_id
-                    : $reconciledPartial['currency']->id,
+                'amount'                  => $reconciledPartial['amount'] ?? 0,
+                'amount_currency'         => money($reconciledPartial['amount'] ?? 0, $lineCurrencyName),
+                'currency_id'             => $partialCurrencyId,
                 'date'                    => $counterpartLine->date,
                 'partial_id'              => $reconciledPartial['partial_id'],
                 'account_payment_id'      => $counterpartLine->payment_id,
-                'payment_method_name'     => $counterpartLine->payment?->paymentMethodLine->name,
+                'payment_method_name'     => $counterpartLine->payment?->paymentMethodLine?->name,
                 'move_id'                 => $counterpartLine->move_id,
-                'move_type'               => $counterpartLine->move->move_type,
+                'move_type'               => $counterpartLine->move?->move_type,
                 'ref'                     => $reconciliationRef,
                 'is_exchange'             => $reconciledPartial['is_exchange'],
-                'amount_company_currency' => money(abs($counterpartLine->balance), $counterpartLine->company->currency->name),
+                'amount_company_currency' => money(abs($counterpartLine->balance), $companyCurrencyName),
                 'amount_foreign_currency' => $foreignCurrency
                     ? money(abs($counterpartLine->amount_currency), $foreignCurrency->name)
                     : null,
@@ -1101,26 +1111,34 @@ class Move extends Model implements Sortable
                 $partialValuesList[] = [
                     'line_id'    => $row->counterpart_line_id,
                     'partial_id' => $row->id,
-                    'currency'   => $this->company->currency_id,
+                    'currency'   => $this->company?->currency ?? $this->currency,
                 ];
             }
         }
 
-        $counterpartLines = MoveLine::whereIn('id', array_unique($counterpartLineIds))
+        $counterpartLines = MoveLine::with(['move', 'journal.company', 'currency', 'company.currency', 'payment.paymentMethodLine'])
+            ->whereIn('id', array_unique($counterpartLineIds))
             ->get()
             ->keyBy('id');
 
-        foreach ($partialValuesList as &$partialValues) {
-            $partialValues['line'] = $counterpartLines[$partialValues['line_id']];
+        $filteredValuesList = [];
+        foreach ($partialValuesList as $partialValues) {
+            $line = $counterpartLines->get($partialValues['line_id']);
+            if (! $line) {
+                continue;
+            }
 
-            $partialValues['is_exchange'] = in_array($partialValues['line']->move_id, $exchangeMoveIds);
+            $partialValues['line'] = $line;
+            $partialValues['is_exchange'] = in_array($line->move_id, $exchangeMoveIds);
 
             if ($partialValues['is_exchange']) {
-                $partialValues['amount'] = abs($partialValues['line']->balance);
+                $partialValues['amount'] = abs($line->balance);
             }
+
+            $filteredValuesList[] = $partialValues;
         }
 
-        return $partialValuesList;
+        return $filteredValuesList;
     }
 
     /**

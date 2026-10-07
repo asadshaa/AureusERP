@@ -105,14 +105,19 @@
                         <div class="flex items-center gap-2">
                             {{ ($this->unReconcileAction())(['partial_id' => $line['partial_id']]) }}
 
-                            <div class="flex-1">
-                                <x-filament::link :href="$this->getResourceUrl($line)">
-                                    {{ $line['ref'] }}
-                                </x-filament::link>
+                                @if ($url = $this->getResourceUrl($line))
+                                    <x-filament::link :href="$url">
+                                        {{ $line['ref'] }}
+                                    </x-filament::link>
+                                @else
+                                    <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                        {{ $line['ref'] }}
+                                    </span>
+                                @endif
                                 
-                                @if (isset($line['date']))
+                                @if (! empty($line['date']))
                                     <div class="text-xs text-gray-500 dark:text-gray-400">
-                                        Paid on {{ $line['date']->format('M D, Y') }}
+                                        Paid on {{ $line['date'] instanceof \Carbon\CarbonInterface ? $line['date']->format('M d, Y') : \Illuminate\Support\Carbon::parse($line['date'])->format('M d, Y') }}
                                     </div>
                                 @endif
                             </div>
@@ -139,12 +144,20 @@
                             {{ ($this->reconcileAction())(['lineId' => $line['id']]) }}
 
                             <div class="flex-1">
-                                <x-filament::link :href="$this->getResourceUrl($line)">
-                                    {{ $line['journal_name'] }}
-                                </x-filament::link>
+                                @if ($url = $this->getResourceUrl($line))
+                                    <x-filament::link :href="$url">
+                                        {{ $line['journal_name'] }}
+                                    </x-filament::link>
+                                @else
+                                    <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                                        {{ $line['journal_name'] }}
+                                    </span>
+                                @endif
                                 
-                                @if (isset($line['date']))
-                                    <div class="text-xs text-gray-500 dark:text-gray-400">{{ $line['date'] }}</div>
+                                @if (! empty($line['date']))
+                                    <div class="text-xs text-gray-500 dark:text-gray-400">
+                                        {{ $line['date'] instanceof \Carbon\CarbonInterface ? $line['date']->format('M d, Y') : \Illuminate\Support\Carbon::parse($line['date'])->format('M d, Y') }}
+                                    </div>
                                 @endif
                             </div>
                         </div>
