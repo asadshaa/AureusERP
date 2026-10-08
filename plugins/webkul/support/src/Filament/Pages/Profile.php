@@ -10,6 +10,7 @@ use Filament\Auth\MultiFactor\Contracts\MultiFactorAuthenticationProvider;
 use Filament\Facades\Filament;
 use Filament\Forms\Components\FileUpload;
 use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Forms\Concerns\InteractsWithForms;
 use Filament\Forms\Contracts\HasForms;
@@ -28,7 +29,10 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
 use Webkul\Employee\Models\Employee;
+use Webkul\Employee\Services\EmployeeSensitiveChangeService;
+use Webkul\Partner\Models\BankAccount;
 use Webkul\Support\Filament\Clusters\Settings;
+use Webkul\Support\Services\ApprovalEngine;
 
 class Profile extends Page implements HasForms
 {
@@ -612,6 +616,94 @@ class Profile extends Page implements HasForms
                             ->body(__('support::filament/pages/profile.password.notification.error.body'))
                             ->danger()
                             ->duration(5000)
+                            ->send();
+                    }
+                }),
+            Action::make('requestSensitiveChange')
+                ->label('Request Sensitive Data Update')
+                ->icon('heroicon-o-shield-check')
+                ->color('primary')
+                ->visible(fn (): bool => ($this->getUser()->employee ?? Employee::where('user_id', $this->getUser()->id)->first()) !== null)
+                ->modalHeading('Request Sensitive Data Update')
+                ->modalDescription('Changes to official identification, passport, or bank details are subject to internal HR verification and approval.')
+                ->modalIcon('heroicon-o-shield-check')
+                ->modalSubmitActionLabel('Submit for HR Approval')
+                ->fillForm(function (): array {
+                    $employee = $this->getUser()->employee ?? Employee::where('user_id', $this->getUser()->id)->first();
+
+                    return [
+                        'identification_id' => $employee?->identification_id,
+                        'passport_id'       => $employee?->passport_id,
+                        'bank_account_id'   => $employee?->bank_account_id,
+                        'reason'            => '',
+                    ];
+                })
+                ->schema([
+                    TextInput::make('identification_id')
+                        ->label('National ID / CNIC')
+                        ->placeholder('e.g. 42101-1234567-1')
+                        ->maxLength(50),
+                    TextInput::make('passport_id')
+                        ->label('Passport Number')
+                        ->placeholder('e.g. PK1234567')
+                        ->maxLength(50),
+                    Select::make('bank_account_id')
+                        ->label('Bank Account')
+                        ->options(fn () => BankAccount::query()->pluck('account_number', 'id'))
+                        ->placeholder('Select or search existing bank account')
+                        ->searchable()
+                        ->preload(),
+                    Textarea::make('reason')
+                        ->label('Reason / Justification for Change')
+                        ->placeholder('Explain why you are requesting to update your sensitive information (e.g., CNIC renewal, new salary bank account).')
+                        ->required()
+                        ->rows(3)
+                        ->columnSpanFull(),
+                ])
+                ->action(function (Action $action, array $data): void {
+                    try {
+                        $user = $this->getUser();
+                        $employee = $user->employee ?? Employee::where('user_id', $user->id)->firstOrFail();
+
+                        $changes = [];
+                        if (array_key_exists('identification_id', $data) && $data['identification_id'] !== $employee->identification_id) {
+                            $changes['identification_id'] = $data['identification_id'];
+                        }
+                        if (array_key_exists('passport_id', $data) && $data['passport_id'] !== $employee->passport_id) {
+                            $changes['passport_id'] = $data['passport_id'];
+                        }
+                        if (array_key_exists('bank_account_id', $data) && $data['bank_account_id'] != $employee->bank_account_id) {
+                            $changes['bank_account_id'] = $data['bank_account_id'];
+                        }
+
+                        if (empty($changes)) {
+                            Notification::make()
+                                ->title('No Changes Detected')
+                                ->body('Please provide at least one modified value to submit a change request.')
+                                ->warning()
+                                ->send();
+
+                            return;
+                        }
+
+                        $req = app(EmployeeSensitiveChangeService::class)->submit(
+                            $employee,
+                            $user,
+                            $changes,
+                            $data['reason'] ?? null,
+                        );
+
+                        Notification::make()
+                            ->title('Sensitive Data Update Request Submitted')
+                            ->body('Your request has been routed to HR for review: '.app(ApprovalEngine::class)->describeCurrentApprover($req))
+                            ->success()
+                            ->duration(6000)
+                            ->send();
+                    } catch (Exception $e) {
+                        Notification::make()
+                            ->title('Failed to Submit Request')
+                            ->body($e->getMessage())
+                            ->danger()
                             ->send();
                     }
                 }),

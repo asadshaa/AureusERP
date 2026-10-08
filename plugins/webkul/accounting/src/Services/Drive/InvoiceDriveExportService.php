@@ -3,7 +3,7 @@
 namespace Webkul\Accounting\Services\Drive;
 
 use Barryvdh\DomPDF\Facade\Pdf;
-use Filament\Notifications\Actions\Action;
+use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Auth;

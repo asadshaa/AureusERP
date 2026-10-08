@@ -2,6 +2,8 @@
 
 namespace Webkul\Employee\Services;
 
+use Filament\Actions\Action;
+use Filament\Notifications\Notification as FilamentNotification;
 use RuntimeException;
 use Webkul\Employee\Models\Employee;
 use Webkul\Security\Models\User;
@@ -46,10 +48,8 @@ class EmployeeSensitiveChangeService
      * bypass review. A requester with neither the permission nor HR-scope
      * visibility of this employee at all -- some unrelated user, or someone
      * outside this company -- is refused.
-     *
-     * @param  array<string, mixed>  $changes
      */
-    public function submit(Employee $employee, User $requester, array $changes): ApprovalRequest
+    public function submit(Employee $employee, User $requester, array $changes, ?string $reason = null): ApprovalRequest
     {
         if (! $requester->can('hr_manage_sensitive_employee_data')) {
             $this->hierarchy->assertCanManage($requester, $employee);
@@ -60,7 +60,10 @@ class EmployeeSensitiveChangeService
             throw new RuntimeException('No supported sensitive employee changes were supplied.');
         }
 
-        return $this->approvals->submit(
+        $fieldNames = collect(array_keys($changes))->map(fn ($k) => str_replace('_', ' ', $k))->implode(', ');
+        $summary = "Update {$fieldNames}";
+
+        $approval = $this->approvals->submit(
             $employee,
             $requester,
             'employee_sensitive_change',
@@ -69,10 +72,62 @@ class EmployeeSensitiveChangeService
                 'company_id'      => (int) $employee->company_id,
                 'employee_id'     => (int) $employee->id,
                 'department_id'   => $employee->department_id,
+                'summary'         => $summary,
+                'reason'          => $reason,
                 'previous_values' => $employee->only(array_keys($changes)),
                 'new_values'      => $changes,
             ],
         );
+
+        $this->notifyApprovers($employee, $requester, $summary, $reason);
+
+        return $approval;
+    }
+
+    private function notifyApprovers(Employee $employee, User $requester, string $summary, ?string $reason = null): void
+    {
+        try {
+            $companyId = (int) $employee->company_id;
+
+            $recipients = User::query()
+                ->where('default_company_id', $companyId)
+                ->where('is_active', true)
+                ->get()
+                ->filter(fn (User $u): bool => (
+                    $u->hasRole([
+                        'hr', 'Hr', 'hr_manager', 'Hr_manager', 'hr manager',
+                        'hr_ops_manager', 'hr ops manager', 'hr operations manager',
+                        'hr_administrator', 'hr administrator', 'human resources', 'human resources manager',
+                        'sensitive_data_custodian', 'Sensitive_data_custodian',
+                    ])
+                    || $u->can('hr_manage_sensitive_employee_data')
+                    || $u->can('hr_view_all_records')
+                ) && (int) $u->id !== (int) $requester->id);
+
+            if ($recipients->isEmpty()) {
+                return;
+            }
+
+            $who = $employee->name.((int) $employee->user_id !== (int) $requester->id ? " (submitted by {$requester->name})" : '');
+            $reasonNote = $reason ? " | Reason: {$reason}" : '';
+
+            $notification = FilamentNotification::make()
+                ->warning()
+                ->icon('heroicon-o-shield-check')
+                ->title("Sensitive Data Update Request: {$employee->name}")
+                ->body("{$who} requested to update sensitive information ({$summary}){$reasonNote}. Review in Approval Requests.")
+                ->actions([
+                    Action::make('view')
+                        ->label('Review in Queue')
+                        ->url(url('/admin/settings/approval-requests')),
+                ]);
+
+            foreach ($recipients as $recipient) {
+                $recipient->notifyNow($notification->toDatabase());
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     public function applyApproved(ApprovalRequest $request): Employee

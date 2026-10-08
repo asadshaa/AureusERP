@@ -141,7 +141,7 @@ class ListInvoices extends ListRecords
                             ->title('Google Drive Sync Complete')
                             ->body("Retrieved {$count} document(s) across all company Drive folders. Open Drive Ingestion Review to confirm or reject them.")
                             ->actions([
-                                \Filament\Notifications\Actions\Action::make('review')
+                                Action::make('review')
                                     ->label('Review Documents')
                                     ->button()
                                     ->url(url('/admin/accounting/configuration/drive-ingestion-classifications')),

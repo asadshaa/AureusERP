@@ -119,6 +119,9 @@ final class ApprovalEngine
         if ($step->approver_role_id && $actor->roles()->whereKey($step->approver_role_id)->exists()) {
             return true;
         }
+        if ($request->request_type === 'employee_sensitive_change' && $this->isHrApprover($actor)) {
+            return true;
+        }
 
         // Hierarchy-based steps ("requester_manager" etc.) must route off the
         // employee the request is ABOUT, not whoever happened to click
@@ -152,8 +155,29 @@ final class ApprovalEngine
         return $this->isHrOrAdminApprover($actor, $request);
     }
 
+    private function resolveTechHeadUserId(ApprovalRequest $request): ?int
+    {
+        return DB::table('employees_departments')
+            ->join('employees_employees', 'employees_departments.manager_id', '=', 'employees_employees.id')
+            ->where('employees_departments.company_id', $request->company_id)
+            ->where(function ($query) {
+                $query->where('employees_departments.name', 'like', '%Engineering%')
+                    ->orWhere('employees_departments.name', 'like', '%Tech%');
+            })
+            ->whereNotNull('employees_employees.user_id')
+            ->value('employees_employees.user_id');
+    }
+
     private function canActAsDepartmentManager(mixed $subjectEmployee, User $actor, ApprovalRequest $request): bool
     {
+        if ($request->request_type === 'claim_tech') {
+            $techHeadUserId = $this->resolveTechHeadUserId($request);
+
+            if ($techHeadUserId) {
+                return (int) $techHeadUserId === (int) $actor->id;
+            }
+        }
+
         $deptManagerUserId = $subjectEmployee?->department?->manager?->user_id;
 
         if ($deptManagerUserId) {
@@ -180,6 +204,28 @@ final class ApprovalEngine
         }
 
         return $this->isHrOrAdminApprover($actor, $request);
+    }
+
+    private function isHrApprover(User $actor): bool
+    {
+        return $actor->hasRole([
+            'hr',
+            'Hr',
+            'hr_manager',
+            'Hr_manager',
+            'hr manager',
+            'hr_ops_manager',
+            'hr ops manager',
+            'hr operations manager',
+            'hr_administrator',
+            'hr administrator',
+            'human resources',
+            'human resources manager',
+            'sensitive_data_custodian',
+            'Sensitive_data_custodian',
+        ])
+        || $actor->can('hr_manage_sensitive_employee_data')
+        || $actor->can('hr_view_all_records');
     }
 
     private function isHrOrAdminApprover(User $actor, ApprovalRequest $request): bool
@@ -246,9 +292,17 @@ final class ApprovalEngine
         }
 
         $subjectEmployee = $this->resolveHierarchySubjectEmployee($request);
+        $techHeadUser = null;
+        if ($step->hierarchy_route === 'department_manager' && $request->request_type === 'claim_tech') {
+            $techHeadUserId = $this->resolveTechHeadUserId($request);
+            if ($techHeadUserId) {
+                $techHeadUser = User::find($techHeadUserId);
+            }
+        }
+
         $manager = match ($step->hierarchy_route) {
             'requester_manager'  => $subjectEmployee?->parent?->user,
-            'department_manager' => $subjectEmployee?->department?->manager?->user,
+            'department_manager' => $techHeadUser ?? $subjectEmployee?->department?->manager?->user,
             'team_manager'       => $subjectEmployee?->team?->manager?->user,
             default              => null,
         };

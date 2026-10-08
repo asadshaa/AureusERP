@@ -83,7 +83,7 @@ function raFixture(): array
     $financeUser->assignRole($financeRole);
     $financeUser->allowedCompanies()->syncWithoutDetaching([$companyA->id]);
 
-    $adminRole = Role::query()->where('name', 'Admin')->where('guard_name', 'web')->firstOrFail();
+    $adminRole = Role::query()->firstOrCreate(['name' => 'Admin', 'guard_name' => 'web']);
     $adminUser = User::factory()->create([
         'default_company_id' => $companyA->id, 'is_active' => true, 'resource_permission' => PermissionType::INDIVIDUAL,
     ]);

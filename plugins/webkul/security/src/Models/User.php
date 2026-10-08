@@ -94,9 +94,9 @@ class User extends BaseUser implements FilamentUser, HasAppAuthentication, HasAp
         return $this->hasMany(Department::class, 'manager_id');
     }
 
-    public function companies(): HasMany
+    public function companies(): BelongsToMany
     {
-        return $this->hasMany(Company::class);
+        return $this->allowedCompanies();
     }
 
     public function partner(): BelongsTo

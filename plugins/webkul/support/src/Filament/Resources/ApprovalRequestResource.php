@@ -21,6 +21,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Webkul\Employee\Models\AttendanceRecord;
+use Webkul\Employee\Models\Employee;
 use Webkul\Employee\Models\EmployeeRequest;
 use Webkul\Support\Enums\NavigationGroup;
 use Webkul\Support\Filament\Resources\ApprovalRequestResource\Pages\ListApprovalRequests;
@@ -182,6 +183,34 @@ class ApprovalRequestResource extends Resource
                                         ->visible(fn (ApprovalRequest $record): bool => $record->subject instanceof EmployeeRequest && isset($record->subject->payload['requested']))
                                         ->icon('heroicon-o-clock')
                                         ->columnSpanFull(),
+                                    TextEntry::make('sensitive_change_diff')
+                                        ->label('Requested Sensitive Changes')
+                                        ->getStateUsing(function (ApprovalRequest $record): ?string {
+                                            if ($record->request_type !== 'employee_sensitive_change') {
+                                                return null;
+                                            }
+                                            $prev = (array) data_get($record->context, 'previous_values', []);
+                                            $new = (array) data_get($record->context, 'new_values', []);
+                                            $lines = [];
+                                            foreach ($new as $key => $val) {
+                                                $fieldLabel = ucwords(str_replace('_', ' ', $key));
+                                                $oldVal = $prev[$key] ?? '—';
+                                                $newVal = $val ?? '—';
+                                                if (empty($oldVal)) {
+                                                    $oldVal = '—';
+                                                }
+                                                if (empty($newVal)) {
+                                                    $newVal = '—';
+                                                }
+                                                $lines[] = "• {$fieldLabel}: {$oldVal} → {$newVal}";
+                                            }
+
+                                            return implode("\n", $lines);
+                                        })
+                                        ->visible(fn (ApprovalRequest $record): bool => $record->request_type === 'employee_sensitive_change')
+                                        ->extraAttributes(['style' => 'white-space: pre-line;'])
+                                        ->icon('heroicon-o-shield-check')
+                                        ->columnSpanFull(),
                                     TextEntry::make('subject_reason')
                                         ->label('Reason / Notes')
                                         ->getStateUsing(function (ApprovalRequest $record): ?string {
@@ -190,6 +219,9 @@ class ApprovalRequestResource extends Resource
                                             }
                                             if ($record->subject instanceof Leave) {
                                                 return $record->subject->private_name;
+                                            }
+                                            if ($record->request_type === 'employee_sensitive_change') {
+                                                return data_get($record->context, 'reason');
                                             }
 
                                             return null;
@@ -252,6 +284,9 @@ class ApprovalRequestResource extends Resource
                                             if ($record->subject instanceof Leave) {
                                                 return $record->subject->employee?->name;
                                             }
+                                            if ($record->subject instanceof Employee) {
+                                                return $record->subject->name;
+                                            }
 
                                             return $record->requester?->name;
                                         })
@@ -265,6 +300,9 @@ class ApprovalRequestResource extends Resource
                                             }
                                             if ($record->subject instanceof Leave) {
                                                 return $record->subject->employee?->department?->name;
+                                            }
+                                            if ($record->subject instanceof Employee) {
+                                                return $record->subject->department?->name;
                                             }
 
                                             return null;
@@ -412,6 +450,11 @@ class ApprovalRequestResource extends Resource
                         }
                         if ($record->subject instanceof Leave) {
                             return $record->subject->private_name ? Str::limit($record->subject->private_name, 50) : null;
+                        }
+                        if ($record->request_type === 'employee_sensitive_change') {
+                            $r = data_get($record->context, 'reason');
+
+                            return $r ? Str::limit($r, 50) : null;
                         }
 
                         return null;

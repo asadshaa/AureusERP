@@ -3,6 +3,7 @@
 namespace Webkul\Employee\Filament\Resources;
 
 use Filament\Actions\Action;
+use Filament\Actions\ActionGroup;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\DeleteBulkAction;
@@ -1408,57 +1409,56 @@ class EmployeeResource extends Resource
             ->defaultSort('name')
             ->persistSortInSession()
             ->recordActions([
-                ActivityTableAction::make(),
-                Action::make('request_sensitive_change')
-                    ->label('Request sensitive change')
-                    ->icon('heroicon-o-shield-check')
-                    ->visible(fn (): bool => Auth::user()?->can('hr_manage_sensitive_employee_data') ?? false)
-                    ->fillForm(fn (Employee $record): array => [
-                        'identification_id'  => $record->identification_id,
-                        'passport_id'        => $record->passport_id,
-                        'ssnid'              => $record->ssnid,
-                        'sinid'              => $record->sinid,
-                        'bank_account_id'    => $record->bank_account_id,
-                        'salary_grade'       => $record->salary_grade,
-                        'base_salary'        => $record->base_salary,
-                        'salary_currency_id' => $record->salary_currency_id,
-                    ])
-                    ->schema([
-                        TextInput::make('identification_id')->label('CNIC / identification'),
-                        TextInput::make('passport_id')->label('Passport'),
-                        TextInput::make('ssnid')->label('SSN'),
-                        TextInput::make('sinid')->label('SIN'),
-                        Select::make('bank_account_id')->relationship('bankAccount', 'account_number')->searchable()->preload(),
-                        TextInput::make('salary_grade'),
-                        TextInput::make('base_salary')->numeric()->minValue(0),
-                        Select::make('salary_currency_id')->relationship('salaryCurrency', 'name')->searchable()->preload(),
-                    ])
-                    ->action(function (Employee $record, array $data): void {
-                        $request = app(EmployeeSensitiveChangeService::class)->submit($record, Auth::user(), $data);
-                        Notification::make()->success()
-                            ->title('Sensitive change submitted for approval')
-                            ->body(app(ApprovalEngine::class)->describeCurrentApprover($request))
-                            ->send();
-                    }),
-                ViewAction::make()
-                    ->outlined(),
-                EditAction::make()
-                    ->outlined(),
-                RestoreAction::make()
-                    ->outlined()
-                    ->successNotification(
-                        Notification::make()
-                            ->success()
-                            ->title(__('employees::filament/resources/employee.table.actions.restore.notification.title'))
-                            ->body(__('employees::filament/resources/employee.table.actions.restore.notification.body'))
-                    ),
-                DeleteAction::make()
-                    ->successNotification(
-                        Notification::make()
-                            ->success()
-                            ->title(__('employees::filament/resources/employee.table.actions.delete.notification.title'))
-                            ->body(__('employees::filament/resources/employee.table.actions.delete.notification.body'))
-                    ),
+                ViewAction::make(),
+                EditAction::make(),
+                ActionGroup::make([
+                    ActivityTableAction::make(),
+                    Action::make('request_sensitive_change')
+                        ->label('Request sensitive change')
+                        ->icon('heroicon-o-shield-check')
+                        ->visible(fn (): bool => Auth::user()?->can('hr_manage_sensitive_employee_data') ?? false)
+                        ->fillForm(fn (Employee $record): array => [
+                            'identification_id'  => $record->identification_id,
+                            'passport_id'        => $record->passport_id,
+                            'ssnid'              => $record->ssnid,
+                            'sinid'              => $record->sinid,
+                            'bank_account_id'    => $record->bank_account_id,
+                            'salary_grade'       => $record->salary_grade,
+                            'base_salary'        => $record->base_salary,
+                            'salary_currency_id' => $record->salary_currency_id,
+                        ])
+                        ->schema([
+                            TextInput::make('identification_id')->label('CNIC / identification'),
+                            TextInput::make('passport_id')->label('Passport'),
+                            TextInput::make('ssnid')->label('SSN'),
+                            TextInput::make('sinid')->label('SIN'),
+                            Select::make('bank_account_id')->relationship('bankAccount', 'account_number')->searchable()->preload(),
+                            TextInput::make('salary_grade'),
+                            TextInput::make('base_salary')->numeric()->minValue(0),
+                            Select::make('salary_currency_id')->relationship('salaryCurrency', 'name')->searchable()->preload(),
+                        ])
+                        ->action(function (Employee $record, array $data): void {
+                            $request = app(EmployeeSensitiveChangeService::class)->submit($record, Auth::user(), $data);
+                            Notification::make()->success()
+                                ->title('Sensitive change submitted for approval')
+                                ->body(app(ApprovalEngine::class)->describeCurrentApprover($request))
+                                ->send();
+                        }),
+                    RestoreAction::make()
+                        ->successNotification(
+                            Notification::make()
+                                ->success()
+                                ->title(__('employees::filament/resources/employee.table.actions.restore.notification.title'))
+                                ->body(__('employees::filament/resources/employee.table.actions.restore.notification.body'))
+                        ),
+                    DeleteAction::make()
+                        ->successNotification(
+                            Notification::make()
+                                ->success()
+                                ->title(__('employees::filament/resources/employee.table.actions.delete.notification.title'))
+                                ->body(__('employees::filament/resources/employee.table.actions.delete.notification.body'))
+                        ),
+                ]),
             ])
             ->toolbarActions([
                 BulkActionGroup::make([

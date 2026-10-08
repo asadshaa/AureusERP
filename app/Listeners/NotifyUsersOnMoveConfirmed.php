@@ -2,7 +2,7 @@
 
 namespace App\Listeners;
 
-use Filament\Notifications\Actions\Action;
+use Filament\Actions\Action;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Auth;
 use Webkul\Account\Enums\MoveType;
@@ -30,7 +30,7 @@ class NotifyUsersOnMoveConfirmed
         $recipients = User::query()
             ->when($posterId, fn ($query) => $query->where('id', '!=', $posterId))
             ->where(function ($query) use ($move) {
-                $query->whereHas('companies', fn ($c) => $c->where('companies.id', $move->company_id))
+                $query->whereHas('allowedCompanies', fn ($c) => $c->where('companies.id', $move->company_id))
                     ->orWhere('default_company_id', $move->company_id);
             })
             ->get();
