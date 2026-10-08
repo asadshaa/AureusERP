@@ -15,11 +15,18 @@ class LeavePolicy
     public function __construct(protected HrHierarchyService $hierarchy) {}
 
     /**
-     * Determine whether the user can view any models.
+     * This one Policy class governs BOTH the HR-facing Management ->
+     * Time Off resource (permission family "time_off_time::off") and
+     * the employee-facing My Time -> My Time Off self-service resource
+     * (permission family "time_off_my::time::off") -- they share the same
+     * underlying Leave model. Every check below must therefore accept EITHER
+     * permission family, mirroring LeaveAllocationPolicy.
      */
     public function viewAny(User $user): bool
     {
-        return $user->can('view_any_time_off_time::off');
+        return $user->can('view_any_time_off_time::off')
+            || $user->can('view_any_time_off_my::time::off')
+            || (bool) $user->employee;
     }
 
     /**
@@ -30,7 +37,10 @@ class LeavePolicy
      */
     public function view(User $user, Leave $leave): bool
     {
-        if (! $user->can('view_time_off_time::off')) {
+        if (! $user->can('view_time_off_time::off')
+            && ! $user->can('view_time_off_my::time::off')
+            && $user->id !== $leave->employee?->user_id
+        ) {
             return false;
         }
 
@@ -42,7 +52,9 @@ class LeavePolicy
      */
     public function create(User $user): bool
     {
-        return $user->can('create_time_off_time::off');
+        return $user->can('create_time_off_time::off')
+            || $user->can('create_time_off_my::time::off')
+            || (bool) $user->employee;
     }
 
     /**
@@ -60,7 +72,7 @@ class LeavePolicy
      */
     public function update(User $user, Leave $leave): bool
     {
-        if (! $user->can('update_time_off_time::off')) {
+        if (! $user->can('update_time_off_time::off') && ! $user->can('update_time_off_my::time::off')) {
             return false;
         }
 
@@ -75,7 +87,7 @@ class LeavePolicy
      */
     public function delete(User $user, Leave $leave): bool
     {
-        if (! $user->can('delete_time_off_time::off')) {
+        if (! $user->can('delete_time_off_time::off') && ! $user->can('delete_time_off_my::time::off')) {
             return false;
         }
 
@@ -90,6 +102,6 @@ class LeavePolicy
      */
     public function deleteAny(User $user): bool
     {
-        return $user->can('delete_any_time_off_time::off');
+        return $user->can('delete_any_time_off_time::off') || $user->can('delete_any_time_off_my::time::off');
     }
 }

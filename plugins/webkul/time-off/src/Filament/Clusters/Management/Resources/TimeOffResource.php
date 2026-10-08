@@ -62,6 +62,17 @@ class TimeOffResource extends Resource
     }
 
     /**
+     * The shared LeavePolicy::viewAny also admits the employee-only
+     * "my time off" permission (for My Time -> My Time Off), which would put a
+     * Management menu in front of every employee. The Management screen is for
+     * people who manage time off.
+     */
+    public static function canViewAny(): bool
+    {
+        return (bool) Auth::user()?->can('view_any_time_off_time::off');
+    }
+
+    /**
      * Count of leave requests still awaiting a decision (submitted or
      * past the line-manager step, not yet fully approved/refused) within
      * this user's already-scoped visible hierarchy -- getEloquentQuery()

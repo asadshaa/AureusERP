@@ -29,7 +29,9 @@ class LeaveAllocationPolicy
      */
     public function viewAny(User $user): bool
     {
-        return $user->can('view_any_time_off_allocation') || $user->can('view_any_time_off_my::allocation');
+        return $user->can('view_any_time_off_allocation')
+            || $user->can('view_any_time_off_my::allocation')
+            || (bool) $user->employee;
     }
 
     /**
@@ -42,7 +44,10 @@ class LeaveAllocationPolicy
      */
     public function view(User $user, LeaveAllocation $leaveAllocation): bool
     {
-        if (! $user->can('view_time_off_allocation') && ! $user->can('view_time_off_my::allocation')) {
+        if (! $user->can('view_time_off_allocation')
+            && ! $user->can('view_time_off_my::allocation')
+            && $user->id !== $leaveAllocation->employee?->user_id
+        ) {
             return false;
         }
 
@@ -54,7 +59,9 @@ class LeaveAllocationPolicy
      */
     public function create(User $user): bool
     {
-        return $user->can('create_time_off_allocation') || $user->can('create_time_off_my::allocation');
+        return $user->can('create_time_off_allocation')
+            || $user->can('create_time_off_my::allocation')
+            || (bool) $user->employee;
     }
 
     /**
