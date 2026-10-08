@@ -2,8 +2,10 @@
 
 namespace App\Providers;
 
+use App\Listeners\NotifyUsersOnMoveConfirmed;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Facades\Blade;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use Native\Mobile\Edge\Components\Navigation\BottomNav;
@@ -16,6 +18,7 @@ use Native\Mobile\Edge\Components\Navigation\SideNavHeader;
 use Native\Mobile\Edge\Components\Navigation\SideNavItem;
 use Native\Mobile\Edge\Components\Navigation\TopBar;
 use Native\Mobile\Edge\Components\Navigation\TopBarAction;
+use Webkul\Account\Events\MoveConfirmed;
 use Webkul\Security\Models\User;
 
 class AppServiceProvider extends ServiceProvider
@@ -32,6 +35,11 @@ class AppServiceProvider extends ServiceProvider
         if (config('app.force_https')) {
             URL::forceScheme('https');
         }
+
+        Event::listen(
+            MoveConfirmed::class,
+            NotifyUsersOnMoveConfirmed::class
+        );
     }
 
     private function registerNativeMobileComponents(): void

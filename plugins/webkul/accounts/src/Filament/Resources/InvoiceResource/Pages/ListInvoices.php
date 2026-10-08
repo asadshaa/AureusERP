@@ -22,6 +22,11 @@ class ListInvoices extends ListRecords
 
     protected static string $resource = InvoiceResource::class;
 
+    public function getTablePollingInterval(): ?string
+    {
+        return '15s';
+    }
+
     public function getPresetTableViews(): array
     {
         return [

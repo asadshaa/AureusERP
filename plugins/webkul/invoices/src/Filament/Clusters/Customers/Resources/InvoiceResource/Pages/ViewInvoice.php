@@ -3,6 +3,7 @@
 namespace Webkul\Invoice\Filament\Clusters\Customers\Resources\InvoiceResource\Pages;
 
 use Webkul\Account\Filament\Resources\InvoiceResource\Pages\ViewInvoice as BaseViewInvoice;
+use Webkul\Accounting\Filament\Actions\OpenInDriveAction;
 use Webkul\Accounting\Filament\Actions\SendInvoiceToPeerAction;
 use Webkul\Invoice\Filament\Clusters\Customers\Resources\CreditNoteResource;
 use Webkul\Invoice\Filament\Clusters\Customers\Resources\InvoiceResource;
@@ -18,6 +19,7 @@ class ViewInvoice extends BaseViewInvoice
         return [
             ...parent::getHeaderActions(),
             SendInvoiceToPeerAction::make(),
+            OpenInDriveAction::make(),
         ];
     }
 }

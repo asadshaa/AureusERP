@@ -115,6 +115,38 @@ class InvoiceSummary extends Component implements HasActions, HasSchemas
         };
     }
 
+    public function getDriveSyncInfo(): ?array
+    {
+        if (! $this->record) {
+            return null;
+        }
+
+        try {
+            $attachment = $this->record->documentAttachments()
+                ->with(['document.driveSync', 'document.creator'])
+                ->latest()
+                ->first();
+
+            $sync = $attachment?->document?->driveSync;
+
+            if ($sync && $sync->drive_file_id) {
+                return [
+                    'status'        => $sync->status?->value ?? (string) $sync->status,
+                    'drive_file_id' => $sync->drive_file_id,
+                    'url'           => "https://drive.google.com/file/d/{$sync->drive_file_id}/view",
+                    'folder_path'   => $sync->last_sync_path ?: 'Google Drive',
+                    'synced_at'     => $sync->synced_at?->format('M d, Y h:i A') ?? $sync->updated_at?->format('M d, Y h:i A'),
+                    'uploader'      => $attachment->document?->creator?->name ?? 'Aureus System',
+                    'file_name'     => $attachment->document?->title ?? 'Invoice Document',
+                ];
+            }
+        } catch (\Throwable) {
+            return null;
+        }
+
+        return null;
+    }
+
     public function render()
     {
         $this->reconcilablePayments = $this->record?->getReconcilablePayments();

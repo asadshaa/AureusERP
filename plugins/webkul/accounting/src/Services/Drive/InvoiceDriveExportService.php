@@ -3,6 +3,8 @@
 namespace Webkul\Accounting\Services\Drive;
 
 use Barryvdh\DomPDF\Facade\Pdf;
+use Filament\Notifications\Actions\Action;
+use Filament\Notifications\Notification;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
@@ -16,6 +18,8 @@ use Webkul\Accounting\Models\DocumentDriveSync;
 use Webkul\Accounting\Services\DocumentService;
 use Webkul\Accounting\Services\DriveSyncService;
 use Webkul\Accounting\Support\DriveFolderPathResolver;
+use Webkul\Invoice\Filament\Clusters\Customers\Resources\InvoiceResource;
+use Webkul\Invoice\Filament\Clusters\Vendors\Resources\BillResource;
 use Webkul\Security\Models\User;
 use Webkul\Support\Models\Company;
 
@@ -119,7 +123,11 @@ class InvoiceDriveExportService
             @unlink($tempPath);
         }
 
-        return $this->driveSyncService->export($document);
+        $sync = $this->driveSyncService->export($document);
+
+        $this->notifyTeamOfDriveExport($user, $invoice, $sync);
+
+        return $sync;
     }
 
     /**
@@ -216,7 +224,11 @@ class InvoiceDriveExportService
         $company = $invoice->company ?? Company::query()->find($invoice->company_id);
         $paidFolderSegments = $company ? $this->pathResolver->resolvePaidFolder($company, $invoice->partner?->name) : null;
 
-        return $this->driveSyncService->export($document, $paidFolderSegments);
+        $sync = $this->driveSyncService->export($document, $paidFolderSegments);
+
+        $this->notifyTeamOfDriveExport($user, $invoice, $sync);
+
+        return $sync;
     }
 
     /**
@@ -288,6 +300,68 @@ class InvoiceDriveExportService
                 : $this->pathResolver->resolve($document))
             : null;
 
-        return $this->driveSyncService->export($document, $folderSegments);
+        $sync = $this->driveSyncService->export($document, $folderSegments);
+
+        $this->notifyTeamOfDriveExport($user, $record, $sync);
+
+        return $sync;
+    }
+
+    protected function notifyTeamOfDriveExport(?User $user, Move $invoice, DocumentDriveSync $sync): void
+    {
+        try {
+            $actor = $user ?? Auth::user();
+            $actorId = $actor?->id;
+
+            $recipients = User::query()
+                ->when($actorId, fn ($query) => $query->where('id', '!=', $actorId))
+                ->where(function ($query) use ($invoice) {
+                    $query->whereHas('companies', fn ($c) => $c->where('companies.id', $invoice->company_id))
+                        ->orWhere('default_company_id', $invoice->company_id);
+                })
+                ->get();
+
+            if ($recipients->isEmpty()) {
+                return;
+            }
+
+            $folderPath = $sync->last_sync_path ?: 'Google Drive';
+            $actorName = $actor?->name ?? 'A team member';
+
+            $actions = [];
+            if ($sync->drive_file_id) {
+                $actions[] = Action::make('openDrive')
+                    ->label('Open in Drive ↗')
+                    ->button()
+                    ->url("https://drive.google.com/file/d/{$sync->drive_file_id}/view")
+                    ->openUrlInNewTab();
+            }
+
+            $invoiceUrl = match ($invoice->move_type) {
+                MoveType::OUT_INVOICE => class_exists(InvoiceResource::class)
+                    ? InvoiceResource::getUrl('view', ['record' => $invoice->id])
+                    : null,
+                MoveType::IN_INVOICE => class_exists(BillResource::class)
+                    ? BillResource::getUrl('view', ['record' => $invoice->id])
+                    : null,
+                default => null,
+            };
+
+            if ($invoiceUrl) {
+                $actions[] = Action::make('viewInvoice')
+                    ->label('View in ERP')
+                    ->url($invoiceUrl);
+            }
+
+            Notification::make()
+                ->title('Synced to Google Drive')
+                ->body("{$invoice->name} was uploaded to \"{$folderPath}\" by {$actorName}")
+                ->icon('heroicon-o-cloud-arrow-up')
+                ->iconColor('success')
+                ->actions($actions)
+                ->sendToDatabase($recipients);
+        } catch (\Throwable) {
+            // Notification failure should not break the export process
+        }
     }
 }
